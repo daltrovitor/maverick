@@ -1,5 +1,6 @@
 // Hello World
 import { Suspense } from "react";
+import { PartnershipIntro } from "@/components/brand/PartnershipIntro";
 import { SiteFooter } from "@/components/layout/SiteFooter";
 import { SiteHeader } from "@/components/layout/SiteHeader";
 import { Affiliates } from "@/components/sections/Affiliates";
@@ -14,6 +15,7 @@ import { ViralMachine } from "@/components/sections/ViralMachine";
 export default function ProposalPage() {
   return (
     <>
+      <PartnershipIntro />
       <a
         href="#conteudo-principal"
         className="sr-only z-50 rounded-sm bg-ink px-4 py-3 text-sm text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4"

@@ -4,8 +4,9 @@
 import { useEffect, useState } from "react";
 import * as m from "motion/react-m";
 import { AnimatePresence } from "motion/react";
-import { Menu, X } from "lucide-react";
+import { Menu, RotateCcw, X } from "lucide-react";
 import { MaverickMonogram } from "@/components/brand/MaverickMonogram";
+import { replayPartnershipIntro } from "@/components/brand/PartnershipIntro";
 import { ViraWebLogo } from "@/components/brand/ViraWebLogo";
 import { NAV_ITEMS } from "@/lib/content";
 
@@ -67,6 +68,15 @@ export function SiteHeader() {
         </nav>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={replayPartnershipIntro}
+            aria-label="Rever a animação de abertura da proposta"
+            className="hidden min-h-11 items-center gap-1.5 rounded-sm border border-line bg-surface px-3 text-xs font-semibold text-ink-soft transition-colors hover:border-ink hover:text-ink hover:bg-cream cursor-pointer sm:inline-flex"
+          >
+            <RotateCcw className="size-3.5 text-[#b48328]" aria-hidden="true" />
+            <span>Rever animação</span>
+          </button>
           <a
             href="#proposta"
             className="hidden min-h-11 items-center rounded-sm bg-ink px-4 text-sm font-medium text-white transition-colors hover:bg-espresso sm:inline-flex"
@@ -110,6 +120,23 @@ export function SiteHeader() {
                   </a>
                 </li>
               ))}
+              <li className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    replayPartnershipIntro();
+                  }}
+                  aria-label="Rever a animação de abertura da proposta"
+                  className="flex w-full min-h-12 items-center justify-between py-2 font-mono text-sm font-semibold uppercase tracking-wider text-ink cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <RotateCcw className="size-4 text-[#b48328]" aria-hidden="true" />
+                    Rever animação
+                  </span>
+                  <span className="font-mono text-xs text-muted">INTRO</span>
+                </button>
+              </li>
             </ul>
           </m.nav>
         )}

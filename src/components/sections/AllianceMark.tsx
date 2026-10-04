@@ -1,23 +1,12 @@
 // Hello World
-import type { CSSProperties } from "react";
+"use client";
+
+import { RotateCcw } from "lucide-react";
+import { AnimatedMaverickMark, AnimatedViraWebMark } from "@/components/brand/AnimatedMarks";
+import { replayPartnershipIntro } from "@/components/brand/PartnershipIntro";
 import { PointerParallax } from "@/components/ui/PointerParallax";
-import {
-  HORSE_DETAIL_PATHS,
-  HORSE_EYE,
-  HORSE_HALO_WIDTH,
-  HORSE_HEAD_PATHS,
-  HORSE_NECK_PATH,
-  HORSE_TRANSFORM_ATTR,
-  MAVERICK_M_PATHS,
-  MAVERICK_VIEWBOX,
-  VIRAWEB_POLYGONS,
-  VIRAWEB_VIEWBOX,
-} from "@/components/brand/marks";
 
-const BACKGROUND = "#faf6f0";
 const INK = "#1f1612";
-
-const order = (index: number) => ({ "--i": index }) as CSSProperties;
 
 /**
  * Composição de boas-vindas (Server Component): as marcas entram com animações CSS
@@ -45,20 +34,7 @@ export function AllianceMark() {
 
         <div className="parallax-layer absolute left-[10%] top-[12%] w-[42%]" data-depth="-10">
           <div className="mark-slide-left">
-            <svg viewBox={VIRAWEB_VIEWBOX} className="h-auto w-full" role="img" aria-label="Emblema ViraWeb">
-              {VIRAWEB_POLYGONS.map((polygon, index) => (
-                <polygon
-                  key={polygon.points}
-                  className="mark-polygon"
-                  style={order(index)}
-                  points={polygon.points}
-                  fill={polygon.fill}
-                  stroke={polygon.fill}
-                  strokeWidth={1}
-                  strokeLinejoin="round"
-                />
-              ))}
-            </svg>
+            <AnimatedViraWebMark title="Emblema ViraWeb" className="h-auto w-full" />
           </div>
         </div>
 
@@ -71,56 +47,7 @@ export function AllianceMark() {
 
         <div className="parallax-layer absolute bottom-[12%] right-[8%] w-[46%]" data-depth="12">
           <div className="mark-slide-right">
-            <svg viewBox={MAVERICK_VIEWBOX} className="h-auto w-full" role="img" aria-label="Monograma Maverick">
-              <g className="mark-fill">
-                <g fill={INK}>
-                  {MAVERICK_M_PATHS.map((d) => (
-                    <path key={d} d={d} />
-                  ))}
-                </g>
-                <g fill={BACKGROUND} stroke={BACKGROUND} strokeWidth={HORSE_HALO_WIDTH} strokeLinejoin="round">
-                  <g transform={HORSE_TRANSFORM_ATTR}>
-                    {HORSE_HEAD_PATHS.map((d) => (
-                      <path key={d} d={d} />
-                    ))}
-                  </g>
-                  <path d={HORSE_NECK_PATH} />
-                </g>
-                <g fill={INK}>
-                  <g transform={HORSE_TRANSFORM_ATTR}>
-                    {HORSE_HEAD_PATHS.map((d) => (
-                      <path key={d} d={d} />
-                    ))}
-                  </g>
-                  <path d={HORSE_NECK_PATH} />
-                </g>
-                <g transform={HORSE_TRANSFORM_ATTR} fill="none" stroke={BACKGROUND} strokeWidth={2.2} strokeLinecap="round">
-                  {HORSE_DETAIL_PATHS.map((d) => (
-                    <path key={d} d={d} />
-                  ))}
-                </g>
-                <ellipse
-                  cx={HORSE_EYE.cx}
-                  cy={HORSE_EYE.cy}
-                  rx={HORSE_EYE.rx}
-                  ry={HORSE_EYE.ry}
-                  fill={BACKGROUND}
-                  transform={`rotate(${HORSE_EYE.rotate} ${HORSE_EYE.cx} ${HORSE_EYE.cy})`}
-                />
-              </g>
-              {/* Traço vetorial desenhado via stroke-dasharray antes do preenchimento */}
-              <g className="mark-stroke" fill="none" stroke={INK} strokeWidth={1.1} strokeLinejoin="round" aria-hidden="true">
-                {MAVERICK_M_PATHS.map((d, index) => (
-                  <path key={d} d={d} pathLength={1} style={order(index)} />
-                ))}
-                <g transform={HORSE_TRANSFORM_ATTR}>
-                  {HORSE_HEAD_PATHS.map((d, index) => (
-                    <path key={d} d={d} pathLength={1} strokeWidth={1.1 / 0.56} style={order(index + 2)} />
-                  ))}
-                </g>
-                <path d={HORSE_NECK_PATH} pathLength={1} style={order(4)} />
-              </g>
-            </svg>
+            <AnimatedMaverickMark title="Monograma Maverick" className="h-auto w-full" />
           </div>
         </div>
 
@@ -131,9 +58,20 @@ export function AllianceMark() {
           Maverick · Est. 2026
         </span>
       </PointerParallax>
-      <figcaption className="mt-3 font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-        Engenharia de software × Headwear &amp; Lifestyle
-      </figcaption>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <figcaption className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+          Engenharia de software × Headwear &amp; Lifestyle
+        </figcaption>
+        <button
+          type="button"
+          onClick={replayPartnershipIntro}
+          aria-label="Rever a animação de abertura da proposta"
+          className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-soft hover:text-ink transition-colors cursor-pointer"
+        >
+          <RotateCcw className="size-3 text-[#b48328]" aria-hidden="true" />
+          <span>Rever animação</span>
+        </button>
+      </div>
     </figure>
   );
 }

@@ -2,23 +2,25 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { ReactLenis, type LenisRef } from "lenis/react";
+import { ReactLenis, useLenis, type LenisRef } from "lenis/react";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
+import { SCROLL_LOCK_EVENT, type ScrollLockDetail } from "@/lib/scrollLock";
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
 
 const HEADER_OFFSET = -76;
 
-/** Instância global do Lenis sincronizada ao ticker do GSAP (um único loop RAF). */
-function LenisRoot() {
-  const lenisRef = useRef<LenisRef>(null);
+/**
+ * Vive dentro do contexto do Lenis: o hook `useLenis` só recebe a instância depois que o
+ * ReactLenis a cria (num efeito), então tudo que depende dela fica aqui.
+ */
+function LenisBridge() {
+  const lenis = useLenis(ScrollTrigger.update);
 
   useEffect(() => {
-    const lenis = lenisRef.current?.lenis;
     if (!lenis) return;
-
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const applyMotionPreference = () => {
       lenis.options.smoothWheel = !reducedMotion.matches;
@@ -26,43 +28,57 @@ function LenisRoot() {
     applyMotionPreference();
     reducedMotion.addEventListener("change", applyMotionPreference);
 
-    const offScroll = lenis.on("scroll", ScrollTrigger.update);
-    const tick = (time: number) => {
-      lenis.raf(time * 1000);
+    // Intro em tela cheia (ou outros overlays) podem travar/destravar a rolagem.
+    const onLock = (event: Event) => {
+      const { locked } = (event as CustomEvent<ScrollLockDetail>).detail;
+      if (locked) lenis.stop();
+      else lenis.start();
     };
-    gsap.ticker.add(tick);
-    gsap.ticker.lagSmoothing(0);
+    window.addEventListener(SCROLL_LOCK_EVENT, onLock);
+    if (document.documentElement.hasAttribute("data-scroll-locked")) lenis.stop();
 
     return () => {
       reducedMotion.removeEventListener("change", applyMotionPreference);
-      offScroll();
-      gsap.ticker.remove(tick);
+      window.removeEventListener(SCROLL_LOCK_EVENT, onLock);
     };
-  }, []);
+  }, [lenis]);
 
-  return (
-    <ReactLenis
-      root
-      ref={lenisRef}
-      options={{
-        lerp: 0.08,
-        duration: 1.2,
-        autoRaf: false,
-        anchors: { offset: HEADER_OFFSET },
-      }}
-    />
-  );
+  return null;
 }
 
 /**
- * Rolagem inercial Lenis + GSAP ScrollTrigger. O Lenis é montado como irmão da árvore
- * (modo root, sem envolver o conteúdo): nenhum componente da página re-renderiza por causa dele.
+ * Rolagem inercial Lenis sincronizada ao GSAP: um único loop RAF (gsap.ticker) move o Lenis,
+ * e cada evento de scroll do Lenis atualiza o ScrollTrigger. O Lenis é montado como irmão da
+ * árvore (modo root), então nenhum componente da página re-renderiza por causa dele.
  */
 export function SmoothScrollProvider({ children }: { children: ReactNode }) {
+  const lenisRef = useRef<LenisRef>(null);
+
+  useEffect(() => {
+    // Lê a instância a cada frame: ela só existe depois do efeito interno do ReactLenis.
+    const tick = (time: number) => {
+      lenisRef.current?.lenis?.raf(time * 1000);
+    };
+    gsap.ticker.add(tick);
+    gsap.ticker.lagSmoothing(0);
+    return () => gsap.ticker.remove(tick);
+  }, []);
+
   return (
     <>
       {children}
-      <LenisRoot />
+      <ReactLenis
+        root
+        ref={lenisRef}
+        options={{
+          lerp: 0.08,
+          duration: 1.2,
+          autoRaf: false,
+          anchors: { offset: HEADER_OFFSET },
+        }}
+      >
+        <LenisBridge />
+      </ReactLenis>
     </>
   );
 }

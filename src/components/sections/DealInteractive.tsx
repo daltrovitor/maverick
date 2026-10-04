@@ -4,8 +4,9 @@
 import { useCallback, useState, type MouseEvent } from "react";
 import * as m from "motion/react-m";
 import { AnimatePresence, useReducedMotion } from "motion/react";
-import { ArrowUpRight, Check } from "lucide-react";
+import { ArrowUpRight, Check, RotateCcw } from "lucide-react";
 import { MaverickMonogram } from "@/components/brand/MaverickMonogram";
+import { replayPartnershipIntro } from "@/components/brand/PartnershipIntro";
 import { ViraWebLogo } from "@/components/brand/ViraWebLogo";
 import { EquitySimulator } from "@/components/sections/EquitySimulator";
 import { formatBRL, formatInteger } from "@/lib/format";
@@ -95,6 +96,15 @@ export function DealInteractive() {
             Assinar Acordo de Parceria &amp; Iniciar Desenvolvimento
             <ArrowUpRight className="size-4 shrink-0" aria-hidden="true" />
           </m.a>
+          <button
+            type="button"
+            onClick={replayPartnershipIntro}
+            aria-label="Rever a animação de abertura da proposta"
+            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-sm border border-white/20 bg-white/5 px-6 text-center text-sm font-medium text-white transition-colors hover:border-white/40 hover:bg-white/10 cursor-pointer"
+          >
+            <RotateCcw className="size-4 text-champagne" aria-hidden="true" />
+            <span>Rever Animação da Parceria</span>
+          </button>
           <div className="min-h-6" aria-live="polite">
             <AnimatePresence>
               {accepted && (

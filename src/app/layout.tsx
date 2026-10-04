@@ -61,6 +61,14 @@ export const metadata: Metadata = {
     title: "ViraWeb × Maverick — Proposta de Parceria Estratégica",
     description: "A infraestrutura digital definitiva para a Maverick Headwear & Lifestyle.",
   },
+  icons: {
+    icon: [
+      { url: "/icon.png", type: "image/png" },
+      { url: "/favicon.png", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-icon.png", type: "image/png" }],
+    shortcut: ["/favicon.png"],
+  },
   formatDetection: { telephone: false },
 };
 

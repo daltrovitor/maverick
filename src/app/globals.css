@@ -130,6 +130,12 @@ html.lenis body {
   overscroll-behavior: contain;
 }
 
+html[data-scroll-locked],
+html[data-scroll-locked] body {
+  overflow: hidden !important;
+  touch-action: none;
+}
+
 /* ───────────────────────── Range input (simulador / visualizador 3D) ───────────────────────── */
 .range {
   -webkit-appearance: none;

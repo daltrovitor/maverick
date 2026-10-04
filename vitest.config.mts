@@ -7,6 +7,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    pool: "vmThreads",
     include: ["src/**/*.test.ts"],
   },
 });

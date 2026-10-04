@@ -1,0 +1,38 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+/build
+
+# testing
+/coverage
+
+# misc
+.DS_Store
+*.pem
+desktop.ini
+
+# debug
+npm-debug.log*
+
+# env
+.env*
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# vercel
+.vercel
+
+# local audit artifacts
+/lighthouse-*.json
+/lighthouse-*.html
+
+# ferramentas locais
+/.playwright-mcp/
+/graphify-out/

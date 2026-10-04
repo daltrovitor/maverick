@@ -1,0 +1,336 @@
+/* Hello World */
+@import "tailwindcss";
+
+/* ───────────────────────── Design tokens ───────────────────────── */
+@theme {
+  /* Superfícies — White Standard */
+  --color-paper: #ffffff;
+  --color-surface: #fafafa;
+  --color-cream: #faf6f0;
+  --color-line: #ebe5dc;
+  --color-line-strong: #d9cfc1;
+
+  /* Tinta — Marrom Espresso Maverick (contrastes medidos sobre #fff e #faf6f0) */
+  --color-ink: #1f1612; /* 16.5:1 */
+  --color-ink-soft: #4a3b33; /* 9.9:1 */
+  --color-muted: #6f6158; /* 5.5:1 */
+  --color-espresso: #2b1d16;
+
+  /* Maverick — Champanhe */
+  --color-champagne: #d4af37; /* decorativo / texto apenas sobre espresso */
+  --color-champagne-ink: #7a5c14; /* texto dourado acessível, 5.8:1 */
+  --color-bronze: #9a6a1c; /* série de gráficos Maverick */
+
+  /* ViraWeb — Cobalto & Âmbar */
+  --color-navy: #132a46;
+  --color-cobalt-deep: #113f73;
+  --color-cobalt: #2965ae; /* 5.5:1, série de gráficos ViraWeb */
+  --color-sky: #3aa7d4;
+  --color-amber: #f2bf12;
+
+  /* Estado */
+  --color-success: #2f6b3a;
+
+  /* Raios arquitetônicos */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+
+  /* Easing */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Mola newtoniana (stiffness 300, damping 28, massa 1) amostrada em linear(); assenta em ~465 ms */
+  --ease-spring: linear(0, 0.0276, 0.0964, 0.1889, 0.2925, 0.3981, 0.4996, 0.593, 0.6763, 0.7485, 0.8096, 0.8601, 0.901, 0.9333, 0.9583, 0.9771, 0.9908, 1.0004, 1.0068, 1.0106, 1.0127, 1.0134, 1.0132, 1.0123, 1.0111, 1.0098, 1.0083, 1.007, 1.0057, 1.0045, 1.0036, 1.0027, 1);
+  --duration-spring: 465ms;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, "Roboto Mono", Menlo, monospace;
+  --font-serif: var(--font-instrument), "Iowan Old Style", Georgia, serif;
+  --font-display: var(--font-instrument), "Iowan Old Style", Georgia, serif;
+}
+
+/* ───────────────────────── Base ───────────────────────── */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  html,
+  body {
+    overflow-x: clip;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  ::selection {
+    background-color: #1f1612;
+    color: #ffffff;
+  }
+
+  /* Todo gatilho interativo com cursor de ação */
+  a[href],
+  button:not(:disabled),
+  [role="button"],
+  [role="tab"],
+  [role="switch"],
+  summary,
+  label[for],
+  select,
+  input[type="range"],
+  input[type="checkbox"],
+  input[type="radio"] {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-cobalt);
+    outline-offset: 3px;
+    border-radius: var(--radius-xs);
+  }
+
+  .on-dark :focus-visible,
+  .on-dark:focus-visible {
+    outline-color: var(--color-champagne);
+  }
+
+  h1,
+  h2 {
+    text-wrap: balance;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ───────────────────────── Lenis ───────────────────────── */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis:not(.lenis-autoToggle).lenis-stopped {
+  overflow: clip;
+}
+
+.lenis [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+/* ───────────────────────── Range input (simulador / visualizador 3D) ───────────────────────── */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 48px;
+  background: transparent;
+  touch-action: pan-y;
+}
+
+.range::-webkit-slider-runnable-track {
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    var(--range-fill, var(--color-ink)) 0 var(--range-progress, 50%),
+    var(--color-line-strong) var(--range-progress, 50%) 100%
+  );
+}
+
+.range::-moz-range-track {
+  height: 2px;
+  background: var(--color-line-strong);
+}
+
+.range::-moz-range-progress {
+  height: 2px;
+  background: var(--range-fill, var(--color-ink));
+}
+
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -10px;
+  border-radius: var(--radius-xs);
+  background: var(--color-paper);
+  border: 2px solid var(--range-fill, var(--color-ink));
+  box-shadow: 0 1px 2px rgb(31 22 18 / 0.18);
+  transition: transform 160ms var(--ease-out-expo);
+}
+
+.range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-xs);
+  background: var(--color-paper);
+  border: 2px solid var(--range-fill, var(--color-ink));
+}
+
+.range:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+.range:focus-visible {
+  outline-offset: 0;
+}
+
+/* ───────────────────────── Utilitários editoriais ───────────────────────── */
+.hairline-grid {
+  background-image: linear-gradient(to right, var(--color-line) 1px, transparent 1px);
+  background-size: calc(100% / 12) 100%;
+}
+
+/* ───────────────────────── Tipografia cinética mascarada ───────────────────────── */
+.kinetic-mask {
+  display: inline-block;
+  overflow: hidden;
+  padding-bottom: 0.12em;
+  margin-bottom: -0.12em;
+  vertical-align: bottom;
+}
+
+.kinetic-word {
+  display: inline-block;
+}
+
+/* Armar é instantâneo (sem transição): nada anima durante o carregamento. */
+.kinetic[data-armed] .kinetic-word {
+  transform: translate3d(0, 105%, 0);
+}
+
+.kinetic[data-armed][data-inview] .kinetic-word {
+  transform: none;
+  transition: transform calc(var(--duration-spring) * 1.4) var(--ease-spring);
+  transition-delay: calc(var(--i, 0) * 35ms);
+}
+
+/* ───────────────────────── Entrada das marcas (hero) ───────────────────────── */
+@keyframes mark-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.55) rotate(-6deg);
+  }
+}
+
+@keyframes mark-slide-left {
+  from {
+    opacity: 0;
+    transform: translate3d(-48px, 0, 0);
+  }
+}
+
+@keyframes mark-slide-right {
+  from {
+    opacity: 0;
+    transform: translate3d(48px, 0, 0);
+  }
+}
+
+@keyframes mark-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+@keyframes mark-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes mark-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.mark-polygon {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mark-pop calc(var(--duration-spring) * 1.3) var(--ease-spring) both;
+  animation-delay: calc(100ms + var(--i, 0) * 45ms);
+}
+
+.mark-slide-left {
+  animation: mark-slide-left calc(var(--duration-spring) * 1.4) var(--ease-spring) both;
+}
+
+.mark-slide-right {
+  animation: mark-slide-right calc(var(--duration-spring) * 1.4) var(--ease-spring) 150ms both;
+}
+
+.mark-stroke path {
+  stroke-dasharray: 1;
+  animation: mark-draw 1.5s cubic-bezier(0.65, 0, 0.35, 1) both;
+  animation-delay: calc(300ms + var(--i, 0) * 70ms);
+}
+
+.mark-stroke {
+  animation: mark-fade-out 0.6s ease 2.1s both;
+}
+
+.mark-fill {
+  animation: mark-fade-in 0.7s var(--ease-out-expo) 1.35s both;
+}
+
+.mark-line {
+  stroke-dasharray: 1;
+  animation: mark-draw 1.1s cubic-bezier(0.65, 0, 0.35, 1) 0.9s both;
+}
+
+.mark-cross {
+  animation: mark-pop calc(var(--duration-spring) * 1.3) var(--ease-spring) 1.2s both;
+}
+
+/* As marcas só começam a animar depois da primeira pintura (ver PointerParallax). */
+.alliance:not([data-play]) :is(.mark-polygon, .mark-slide-left, .mark-slide-right, .mark-stroke, .mark-stroke path, .mark-fill, .mark-line, .mark-cross) {
+  animation-play-state: paused;
+}
+
+.magnetic {
+  transition:
+    transform var(--duration-spring) var(--ease-spring),
+    background-color 200ms ease,
+    border-color 200ms ease;
+}
+
+.magnetic:active {
+  scale: 0.97;
+}
+
+.parallax-layer {
+  transition: transform 600ms var(--ease-out-expo);
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  header[data-site-header],
+  .no-print {
+    display: none !important;
+  }
+}

@@ -1,5 +1,8 @@
 // Hello World
-/** Texturas procedurais do boné: trama de sarja (relevo) e sombra de contato. */
+/**
+ * Texturas procedurais do boné (geradas no navegador, sem downloads extras):
+ * normal map de sarja, variação de tom/rugosidade de tecido lavado.
+ */
 import { CanvasTexture, LinearSRGBColorSpace, RepeatWrapping, SRGBColorSpace } from "three";
 
 function createCanvas(width: number, height: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
@@ -23,72 +26,88 @@ function random(seed: number): () => number {
   };
 }
 
+function repeatTexture(canvas: HTMLCanvasElement, srgb: boolean): CanvasTexture {
+  const texture = new CanvasTexture(canvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.colorSpace = srgb ? SRGBColorSpace : LinearSRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
 /**
- * Sarja lavada (a diagonal visível na foto do boné): mapa de relevo em tons de cinza com
- * diagonais 2/1 e leve irregularidade de fio.
+ * Normal map de sarja 2/1: diagonais de fios com leve irregularidade (a trama visível nas
+ * fotos de lateral e traseira). Calculado a partir de um campo de altura.
  */
-export function createTwillBump(): CanvasTexture {
-  const size = 256;
-  const { canvas, ctx } = createCanvas(size, size);
-  const rand = random(11);
-  const image = ctx.createImageData(size, size);
+export function createTwillNormal(size = 256): CanvasTexture {
+  const rand = random(17);
+  const heightAt = new Float32Array(size * size);
+  const jitter = new Float32Array(size);
+  for (let i = 0; i < size; i += 1) jitter[i] = (rand() - 0.5) * 0.35;
   for (let y = 0; y < size; y += 1) {
     for (let x = 0; x < size; x += 1) {
-      const phase = ((x + y) % 8) / 8;
-      const value = 122 + 62 * Math.sin(phase * Math.PI * 2) + (rand() - 0.5) * 26;
+      const diag = ((x + y) % 6) / 6;
+      const ridge = Math.sin(diag * Math.PI); // fio arredondado
+      const yarn = 0.12 * Math.sin((x - y) * 0.9 + jitter[y]! * 6);
+      heightAt[y * size + x] = ridge * 0.85 + yarn + (rand() - 0.5) * 0.12;
+    }
+  }
+  const { canvas, ctx } = createCanvas(size, size);
+  const image = ctx.createImageData(size, size);
+  const strength = 2.2;
+  const h = (x: number, y: number) => heightAt[((y + size) % size) * size + ((x + size) % size)]!;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = (h(x + 1, y) - h(x - 1, y)) * strength;
+      const dy = (h(x, y + 1) - h(x, y - 1)) * strength;
+      const len = Math.hypot(dx, dy, 1);
       const i = (y * size + x) * 4;
-      const v = Math.max(0, Math.min(255, value));
-      image.data[i] = v;
-      image.data[i + 1] = v;
-      image.data[i + 2] = v;
+      image.data[i] = Math.round(((-dx / len) * 0.5 + 0.5) * 255);
+      image.data[i + 1] = Math.round(((-dy / len) * 0.5 + 0.5) * 255);
+      image.data[i + 2] = Math.round(((1 / len) * 0.5 + 0.5) * 255);
       image.data[i + 3] = 255;
     }
   }
   ctx.putImageData(image, 0, 0);
-  const texture = new CanvasTexture(canvas);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.colorSpace = LinearSRGBColorSpace;
-  texture.anisotropy = 4;
-  return texture;
+  return repeatTexture(canvas, false);
 }
 
-/** Variação sutil de tom do tecido lavado (evita o preto "plástico" uniforme). */
-export function createWashedFabricMap(base: string): CanvasTexture {
-  const size = 256;
+/** Tom de tecido lavado: manchas suaves claras/escuras sobre a cor base (mapa de cor). */
+export function createWashedFabricMap(base: string, seed = 29): CanvasTexture {
+  const size = 512;
   const { canvas, ctx } = createCanvas(size, size);
   ctx.fillStyle = base;
   ctx.fillRect(0, 0, size, size);
-  const rand = random(29);
-  for (let k = 0; k < 900; k += 1) {
+  const rand = random(seed);
+  for (let k = 0; k < 1400; k += 1) {
     const x = rand() * size;
     const y = rand() * size;
-    const r = 6 + rand() * 22;
-    const light = rand() > 0.5;
+    const r = 8 + rand() * 40;
+    const light = rand() > 0.45;
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, light ? "rgba(255,255,255,0.035)" : "rgba(0,0,0,0.05)");
+    g.addColorStop(0, light ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.05)");
     g.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = g;
     ctx.fillRect(x - r, y - r, r * 2, r * 2);
   }
-  const texture = new CanvasTexture(canvas);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
+  return repeatTexture(canvas, true);
 }
 
-/** Sombra de contato suave sob o boné. */
-export function createContactShadow(): CanvasTexture {
+/** Rugosidade com pequenas variações (tecido fosco, sem brilho plástico). */
+export function createFabricRoughness(seed = 41): CanvasTexture {
   const size = 256;
   const { canvas, ctx } = createCanvas(size, size);
-  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  gradient.addColorStop(0, "rgba(20,14,10,0.38)");
-  gradient.addColorStop(0.45, "rgba(20,14,10,0.14)");
-  gradient.addColorStop(1, "rgba(20,14,10,0)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
+  const image = ctx.createImageData(size, size);
+  const rand = random(seed);
+  for (let i = 0; i < size * size; i += 1) {
+    const v = 214 + (rand() - 0.5) * 34;
+    image.data[i * 4] = v;
+    image.data[i * 4 + 1] = v;
+    image.data[i * 4 + 2] = v;
+    image.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+  ctx.filter = "blur(1.5px)";
+  ctx.drawImage(canvas, 0, 0);
+  return repeatTexture(canvas, false);
 }

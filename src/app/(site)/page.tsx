@@ -1,6 +1,6 @@
 // Hello World
 import type { Metadata } from "next";
-import { CapStory } from "@/components/landing/CapStory";
+import { CinematicStory } from "@/components/landing/CinematicStory";
 import { AffiliateBand, Facts, Statement } from "@/components/landing/BrandSections";
 import { ProductLineup, type LineupItem } from "@/components/landing/ProductLineup";
 import { getStoreSettings, listProducts } from "@/lib/catalog";
@@ -22,8 +22,8 @@ export default async function HomePage() {
     imageUrl: p.images[0]?.url ?? null,
     imageAlt: p.images[0]?.alt ?? p.name,
   }));
-  // O CTA principal leva ao primeiro produto em destaque (o boné da experiência, quando cadastrado).
-  const primaryHref = featured[0] ? `/produto/${featured[0].slug}` : "/loja";
+  // "Ver este boné" leva ao primeiro produto em destaque (o boné da experiência, quando cadastrado).
+  const productHref = featured[0] ? `/produto/${featured[0].slug}` : null;
   const instagramUrl = settings?.instagram_url ?? "https://www.instagram.com/maverickcapshop/";
 
   const jsonLd = {
@@ -39,7 +39,7 @@ export default async function HomePage() {
 
   return (
     <>
-      <CapStory primaryHref={primaryHref} />
+      <CinematicStory productHref={productHref} />
       <ProductLineup items={lineup} instagramUrl={instagramUrl} />
       <Statement />
       <Facts />

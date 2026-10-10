@@ -1,40 +1,43 @@
 // Hello World
 /**
- * Cena WebGL do boné principal (dad hat preto com o "B" bordado).
+ * Cena WebGL do boné principal: dad hat Polo preto (seis gomos, pônei bordado na frente,
+ * "POLO" bordado atrás, tira com fivela dourada).
  *
- * Geometria procedural calibrada pela foto frontal; o bordado é a própria fotografia
- * recortada (cor + relevo), aplicada sobre os gomos frontais. Partes que não aparecem na
- * foto (traseira, forro) seguem a construção convencional de um dad hat, sem logos.
- *
- * A pose base vem da rolagem (setPose); o usuário pode girar (arraste/teclado) e aproximar
- * (botões/pinça) por cima dela. A cena só renderiza quando algo muda.
+ * O boné fica parado e a CÂMERA é dirigida (azimute, elevação, distância, ponto de foco),
+ * como num estúdio. As luzes acompanham a câmera para o tecido preto nunca "sumir".
+ * Geometria procedural calibrada pelas fotos; bordados traçados a partir das próprias fotos.
+ * Renderiza só quando algo muda; respeita movimento reduzido; libera tudo em dispose().
  */
 import {
+  BackSide,
   Box3,
   BufferGeometry,
   CircleGeometry,
   Color,
   DirectionalLight,
   DoubleSide,
-  BackSide,
   Group,
   HemisphereLight,
-  Line,
-  LineDashedMaterial,
+  InstancedMesh,
+  LinearSRGBColorSpace,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   NeutralToneMapping,
+  PCFShadowMap,
   PerspectiveCamera,
+  PlaneGeometry,
   PMREMGenerator,
   Quaternion,
   Scene,
+  ShadowMaterial,
   SphereGeometry,
   SRGBColorSpace,
-  LinearSRGBColorSpace,
   TextureLoader,
   TorusGeometry,
+  Vector2,
   Vector3,
   WebGLRenderer,
   type Material,
@@ -52,7 +55,6 @@ import {
   buildCrownGeometry,
   buildCrownPatch,
   buildSeamTube,
-  buildUnderbrimGeometry,
   CAP,
   crownNormal,
   crownOffsetPoint,
@@ -60,30 +62,38 @@ import {
   SEAM_US,
   seamPoints,
 } from "@/components/cap/capGeometry";
-import { createTwillBump, createWashedFabricMap } from "@/components/cap/capTextures";
+import { stitchMatricesAlong } from "@/components/cap/capStitches";
+import { createFabricRoughness, createTwillNormal, createWashedFabricMap } from "@/components/cap/capTextures";
 
-export type PartId = "botao" | "copa" | "bordado" | "aba" | "subaba" | "forro" | "faixa" | "fecho";
-export type AnchorId = "bordado" | "ilhos" | "aba" | "botao" | "costura" | "fecho";
+export type AnchorId = "pony" | "brim" | "eyelet" | "seam" | "polo" | "strap" | "buckle" | "button";
+export type FocusId = "center" | AnchorId;
+
+/** Estado da câmera e da luz (o que a narrativa controla). */
+export interface Rig {
+  /** Azimute da câmera em rad (0 = frente; π = traseira). Pode passar de 2π (voltas). */
+  az: number;
+  /** Elevação da câmera em rad. */
+  el: number;
+  /** Distância como múltiplo do enquadramento do boné inteiro (1 = inteiro no quadro). */
+  dist: number;
+  /** Ponto observado, no espaço do modelo centralizado. */
+  tx: number;
+  ty: number;
+  tz: number;
+  /** Intensidades relativas das luzes principal, de preenchimento e de recorte. */
+  key: number;
+  fill: number;
+  rim: number;
+  exposure: number;
+  /** Deslocamento do produto no quadro (fração da largura/altura) para compor com o texto. */
+  frameX: number;
+  frameY: number;
+}
 
 export interface ProjectedPoint {
   readonly x: number;
   readonly y: number;
   readonly visible: boolean;
-}
-
-export interface Pose {
-  /** Rotação horizontal (rad). 0 = frente para a câmera. */
-  yaw: number;
-  /** Inclinação (rad). Positivo mostra mais o topo, como na foto de produto. */
-  pitch: number;
-  /** Vista explodida 0..1. */
-  explode: number;
-  /** Aproximação da câmera (1 = enquadramento padrão). */
-  zoom: number;
-  /** Deslocamento vertical do boné no quadro (unidades do modelo). */
-  lift: number;
-  /** Deslocamento horizontal do boné no quadro (unidades do modelo). */
-  shift: number;
 }
 
 export interface CapStageOptions {
@@ -92,82 +102,72 @@ export interface CapStageOptions {
   readonly quality: "high" | "low";
   readonly onFrame?: (anchors: Readonly<Record<AnchorId, ProjectedPoint>>) => void;
   readonly onInteract?: () => void;
+  readonly onContextLost?: () => void;
 }
 
-/* Cores medidas na foto do produto (sarja preta lavada, linha cinza, bordado vermelho e branco). */
+/* Cores medidas nas fotos de referência. */
 const PALETTE = {
-  fabric: "#242424",
-  brim: "#2e2e2e",
-  underbrim: "#1a1a1a",
-  thread: "#5d5955",
-  eyelet: "#151515",
-  metal: "#3c3a38",
-  lining: "#262422",
-  sweatband: "#1b1a19",
+  fabric: "#2f2f30",
+  brim: "#323233",
+  thread: "#3a3a3b",
+  eyelet: "#1e1e1f",
+  brass: "#b9a382",
+  lining: "#262524",
+  sweatband: "#1d1c1b",
 } as const;
 
-const ANCHOR_IDS: readonly AnchorId[] = ["bordado", "ilhos", "aba", "botao", "costura", "fecho"];
-const PART_IDS: readonly PartId[] = ["botao", "copa", "bordado", "aba", "subaba", "forro", "faixa", "fecho"];
+const ANCHOR_IDS: readonly AnchorId[] = ["pony", "brim", "eyelet", "seam", "polo", "strap", "buckle", "button"];
 
-const EXPLODE_OFFSETS: Readonly<Record<PartId, Vector3>> = {
-  botao: new Vector3(0, 1.15, 0),
-  copa: new Vector3(0, 0.55, 0),
-  bordado: new Vector3(0, 0.6, 0.75),
-  fecho: new Vector3(0.1, 0.32, -1.05),
-  forro: new Vector3(0, -0.1, 0),
-  faixa: new Vector3(0, -0.5, 0),
-  aba: new Vector3(0, -0.85, 0.2),
-  subaba: new Vector3(0, -1.15, 0.28),
+/* Posições dos bordados no boné (u = volta em torno da copa; v = altura), calibradas pelas fotos. */
+const PONY = { u: 0.506, v0: 0.3, v1: 0.6, comp: 1.15 } as const;
+const POLO = { u: 0.912, v0: 0.47, v1: 0.565, comp: 1 } as const;
+const STRAP = { v0: 0.03, v1: 0.17 } as const;
+const BUCKLE = { u: 0.94, v: 0.1 } as const;
+
+const EL_LIMIT = { min: -0.25, max: 1.05 } as const;
+const ZOOM_LIMIT = { min: 0.75, max: 2.2 } as const;
+
+export const DEFAULT_RIG: Rig = {
+  az: 0,
+  el: 0.22,
+  dist: 1,
+  tx: 0,
+  ty: 0,
+  tz: 0,
+  key: 1,
+  fill: 0.7,
+  rim: 0.8,
+  exposure: 1,
+  frameX: 0,
+  frameY: 0,
 };
-
-const PITCH_LIMIT = { min: -0.45, max: 0.85 } as const;
-const ZOOM_LIMIT = { min: 0.8, max: 1.8 } as const;
-
-interface Anchor {
-  readonly part: PartId;
-  readonly point: Vector3;
-  readonly normal: Vector3 | null;
-}
 
 function damp(current: number, target: number, lambda: number, dt: number): number {
   return current + (target - current) * (1 - Math.exp(-lambda * dt));
 }
 
-function easeInOutCubic(t: number): number {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
-
-/**
- * Posiciona o bordado com a proporção da foto. `verticalComp` compensa a inclinação da frente
- * da copa na vista de referência (frontal, levemente de cima), para o "B" projetado ter a
- * mesma proporção da fotografia.
- */
-function embroideryBounds(
-  aspect: number,
-  v0: number,
-  v1: number,
-  verticalComp = 1,
-): { u0: number; u1: number; v0: number; v1: number } {
+/** Bounds (u0..u1, v0..v1) de um bordado sobre a copa mantendo a proporção da textura. */
+function patchBounds(aspect: number, uCenter: number, v0: number, v1: number, comp: number) {
   let height = 0;
-  let prev = crownPoint(0.5, v0);
+  let prev = crownPoint(uCenter, v0);
   for (let k = 1; k <= 48; k += 1) {
-    const p = crownPoint(0.5, v0 + ((v1 - v0) * k) / 48);
+    const p = crownPoint(uCenter, v0 + ((v1 - v0) * k) / 48);
     height += p.distanceTo(prev);
     prev = p;
   }
-  const target = (height * aspect) / verticalComp;
+  const target = (height * aspect) / comp;
   const vm = (v0 + v1) / 2;
   const arc = (du: number) => {
     let length = 0;
-    let last = crownPoint(0.5 - du, vm);
+    let last = crownPoint(uCenter - du, vm);
     for (let k = 1; k <= 48; k += 1) {
-      const p = crownPoint(0.5 - du + (2 * du * k) / 48, vm);
+      const p = crownPoint(uCenter - du + (2 * du * k) / 48, vm);
       length += p.distanceTo(last);
       last = p;
     }
     return length;
   };
-  let lo = 0.005;
+  let lo = 0.002;
   let hi = 0.24;
   for (let i = 0; i < 30; i += 1) {
     const mid = (lo + hi) / 2;
@@ -175,79 +175,84 @@ function embroideryBounds(
     else hi = mid;
   }
   const du = (lo + hi) / 2;
-  return { u0: 0.5 - du, u1: 0.5 + du, v0, v1 };
+  return { u0: uCenter - du, u1: uCenter + du, v0, v1 };
 }
 
 export class CapStage {
   private readonly renderer: WebGLRenderer;
   private readonly scene = new Scene();
-  // Teleobjetiva (FOV estreito), como em foto de produto: evita que a aba pareça maior por perspectiva.
-  private readonly camera = new PerspectiveCamera(14, 1, 0.1, 120);
-  private readonly pivot = new Group();
+  // Teleobjetiva leve, como fotografia de produto (sem exagerar a aba por perspectiva).
+  private readonly camera = new PerspectiveCamera(20, 1, 0.05, 120);
   private readonly capRoot = new Group();
-  private readonly parts = {} as Record<PartId, Group>;
-  private readonly anchors = {} as Record<AnchorId, Anchor>;
+  private readonly lightRig = new Group();
+  private readonly key = new DirectionalLight(0xffffff, 2.2);
+  private readonly fill = new DirectionalLight(0xf3f1ee, 0.8);
+  private readonly rim = new DirectionalLight(0xffffff, 1.6);
+  private readonly hemi = new HemisphereLight(0xffffff, 0xe8e2d8, 0.55);
+  private readonly anchors = {} as Record<AnchorId, Vector3>;
+  private readonly anchorNormals = {} as Record<AnchorId, Vector3 | null>;
   private readonly disposables: Array<BufferGeometry | Material | Texture> = [];
   private readonly options: CapStageOptions;
 
   private width = 1;
   private height = 1;
-  /** Largura do modelo (vista frontal, sem explosão) e largura desejada na tela em px. */
-  private modelWidth = 2;
-  private modelHeight = 1.6;
-  private frameWidthPx: number | null = null;
   private active = false;
   private dirty = true;
   private lastTime = 0;
+  private modelWidth = 2;
+  private modelHeight = 1.6;
+  private groundY = -0.7;
 
-  private readonly base: Pose = { yaw: 0, pitch: 0.2, explode: 0, zoom: 1, lift: 0, shift: 0 };
-  private readonly current: Pose = { yaw: 0, pitch: 0.2, explode: 0, zoom: 1, lift: 0, shift: 0 };
-  private userYaw = 0;
-  private userPitch = 0;
+  private readonly target: Rig = { ...DEFAULT_RIG };
+  private readonly current: Rig = { ...DEFAULT_RIG };
+  private userAz = 0;
+  private userEl = 0;
   private userZoom = 1;
-  private velocityYaw = 0;
-  private sway = true;
-  private swayTime = 0;
+  private velocityAz = 0;
   private userDecay = false;
-
-  private pointers = new Map<number, { x: number; y: number }>();
+  private pointers = new Map<number, Vector2>();
   private pinchStart = 0;
   private zoomAtPinch = 1;
-  private lastMove = { x: 0, t: 0 };
+  private lastMoveTime = 0;
 
   constructor(options: CapStageOptions) {
     this.options = options;
-    this.renderer = new WebGLRenderer({
-      canvas: options.canvas,
-      antialias: options.quality === "high",
-      alpha: true,
-      powerPreference: "high-performance",
-    });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, options.quality === "high" ? 2 : 1.5));
+    const high = options.quality === "high";
+    this.renderer = new WebGLRenderer({ canvas: options.canvas, antialias: high, alpha: true, powerPreference: "high-performance" });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, high ? 2 : 1.5));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = NeutralToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1;
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = PCFShadowMap;
 
     const pmrem = new PMREMGenerator(this.renderer);
     const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
     this.scene.environment = environment;
-    this.scene.environmentIntensity = 0.38;
+    this.scene.environmentIntensity = 0.62;
     this.disposables.push(environment);
 
-    // Luz de estúdio suave vinda de cima/frente, como na foto do produto.
-    const hemi = new HemisphereLight(0xffffff, 0xd8d2ca, 0.7);
-    const key = new DirectionalLight(0xffffff, 2.1);
-    key.position.set(-2.6, 5.2, 5);
-    const fill = new DirectionalLight(0xf2f0ee, 0.75);
-    fill.position.set(3.4, 1.2, 4.2);
-    const rim = new DirectionalLight(0xffffff, 0.9);
-    rim.position.set(2.5, 3, -4.5);
-    this.scene.add(hemi, key, fill, rim);
+    // Estúdio: principal suave do alto/esquerda, preenchimento à direita, recorte por trás.
+    this.key.position.set(-2.4, 4.6, 4.2);
+    this.key.castShadow = true;
+    this.key.shadow.mapSize.set(high ? 2048 : 1024, high ? 2048 : 1024);
+    this.key.shadow.camera.left = -2.4;
+    this.key.shadow.camera.right = 2.4;
+    this.key.shadow.camera.top = 2.4;
+    this.key.shadow.camera.bottom = -2.4;
+    this.key.shadow.camera.near = 0.5;
+    this.key.shadow.camera.far = 14;
+    this.key.shadow.radius = 6;
+    this.key.shadow.bias = -0.0006;
+    this.key.shadow.normalBias = 0.02;
+    this.fill.position.set(3.6, 1.2, 3.2);
+    this.rim.position.set(0.4, 3.4, -5);
+    this.lightRig.add(this.key, this.fill, this.rim, this.key.target);
+    this.scene.add(this.lightRig, this.hemi);
 
-    this.camera.position.set(0, 0.35, 7);
-    this.sway = !options.reducedMotion;
+    options.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.attachInput(options.canvas);
   }
 
@@ -256,201 +261,234 @@ export class CapStage {
     return item;
   }
 
-  /** Carrega as texturas do bordado (recortadas da foto) e monta o modelo. */
+  /** Carrega as texturas dos bordados e monta o modelo. */
   async load(): Promise<void> {
     const loader = new TextureLoader();
-    const [embroideryMap, embroideryHeight] = await Promise.all([
-      loader.loadAsync("/models/red-sox-b/embroidery.png"),
-      loader.loadAsync("/models/red-sox-b/embroidery-height.png"),
-    ]);
-    embroideryMap.colorSpace = SRGBColorSpace;
-    embroideryMap.anisotropy = 8;
-    embroideryHeight.colorSpace = LinearSRGBColorSpace;
-    this.track(embroideryMap);
-    this.track(embroideryHeight);
-    const image = embroideryMap.image as { width: number; height: number };
-    this.build(embroideryMap, embroideryHeight, image.width / image.height);
+    const load = (file: string) => loader.loadAsync(`/models/polo/${file}`);
+    const [pony, ponyHeight, polo, poloHeight] = await Promise.all([
+      load("pony.png"),
+      load("pony-height.png"),
+      load("polo.png"),
+      load("polo-height.png"),
+    ] as const);
+    for (const t of [pony, polo]) {
+      t.colorSpace = SRGBColorSpace;
+      t.anisotropy = 8;
+    }
+    for (const t of [ponyHeight, poloHeight]) t.colorSpace = LinearSRGBColorSpace;
+    for (const t of [pony, ponyHeight, polo, poloHeight]) this.track(t);
+    const aspect = (t: Texture) => {
+      const img = t.image as { width: number; height: number };
+      return img.width / img.height;
+    };
+    this.build({ map: pony, height: ponyHeight, aspect: aspect(pony) }, { map: polo, height: poloHeight, aspect: aspect(polo) });
     this.dirty = true;
   }
 
-  private part(id: PartId): Group {
-    const group = new Group();
-    group.name = id;
-    this.parts[id] = group;
-    this.capRoot.add(group);
-    return group;
-  }
-
-  private build(embroideryMap: Texture, embroideryHeight: Texture, aspect: number): void {
+  private build(
+    pony: { map: Texture; height: Texture; aspect: number },
+    polo: { map: Texture; height: Texture; aspect: number },
+  ): void {
     const high = this.options.quality === "high";
-    const twill = this.track(createTwillBump());
-    const crownTwill = twill.clone();
-    crownTwill.repeat.set(26, 9);
-    crownTwill.needsUpdate = true;
-    this.track(crownTwill);
+    const twill = this.track(createTwillNormal(256));
+    twill.repeat.set(30, 11);
+    const rough = this.track(createFabricRoughness());
+    rough.repeat.set(6, 3);
     const washed = this.track(createWashedFabricMap(PALETTE.fabric));
     washed.repeat.set(3, 1.4);
 
-    const fabric = (color: string) =>
+    const fabric = (color: string, normalScale = 0.55) =>
       this.track(
         new MeshPhysicalMaterial({
           color: new Color(color),
           map: washed,
-          roughness: 0.93,
-          sheen: 0.55,
-          sheenColor: new Color("#5a5a5a"),
-          sheenRoughness: 0.6,
-          bumpMap: crownTwill,
-          bumpScale: 0.9,
+          roughness: 1,
+          roughnessMap: rough,
+          normalMap: twill,
+          normalScale: new Vector2(normalScale, normalScale),
+          sheen: 0.85,
+          sheenColor: new Color("#808080"),
+          sheenRoughness: 0.62,
           side: DoubleSide,
         }),
       );
     const crownMat = fabric(PALETTE.fabric);
-    const brimMat = fabric(PALETTE.brim);
-    const underMat = fabric(PALETTE.underbrim);
-    const threadMat = this.track(new MeshStandardMaterial({ color: PALETTE.thread, roughness: 0.75 }));
-    const dashed = this.track(
-      new LineDashedMaterial({ color: PALETTE.thread, dashSize: 0.02, gapSize: 0.011, transparent: true, opacity: 0.95 }),
+    const brimMat = fabric(PALETTE.brim, 0.5);
+    const threadMat = this.track(new MeshStandardMaterial({ color: PALETTE.thread, roughness: 0.62 }));
+    const eyeletMat = this.track(new MeshStandardMaterial({ color: PALETTE.eyelet, roughness: 0.6 }));
+    const holeMat = this.track(new MeshBasicMaterial({ color: 0x070707 }));
+    const brassMat = this.track(
+      new MeshPhysicalMaterial({ color: PALETTE.brass, metalness: 1, roughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.4 }),
     );
-    const eyeletMat = this.track(new MeshStandardMaterial({ color: PALETTE.eyelet, roughness: 0.55 }));
-    const holeMat = this.track(new MeshBasicMaterial({ color: 0x050505 }));
-    const metalMat = this.track(new MeshStandardMaterial({ color: PALETTE.metal, roughness: 0.32, metalness: 1 }));
-    const liningMat = this.track(new MeshPhysicalMaterial({ color: PALETTE.lining, roughness: 0.7, sheen: 0.25, side: BackSide }));
-    const sweatMat = this.track(new MeshPhysicalMaterial({ color: PALETTE.sweatband, roughness: 0.65, sheen: 0.4, side: DoubleSide }));
-    const embroideryMat = this.track(
-      new MeshStandardMaterial({
-        map: embroideryMap,
-        // A foto já traz a luz do bordado: escurecemos a base para não "lavar" o vermelho.
-        color: new Color("#c8c8c8"),
-        alphaTest: 0.4,
-        roughness: 0.62,
-        metalness: 0,
-        bumpMap: embroideryHeight,
-        bumpScale: 2.4,
-        displacementMap: embroideryHeight,
-        displacementScale: 0.022,
-        displacementBias: -0.002,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-      }),
-    );
+    const liningMat = this.track(new MeshPhysicalMaterial({ color: PALETTE.lining, roughness: 0.75, sheen: 0.3, side: BackSide }));
+    const sweatMat = this.track(new MeshPhysicalMaterial({ color: PALETTE.sweatband, roughness: 0.7, sheen: 0.4, side: DoubleSide }));
+    const embroideryMat = (map: Texture, height: Texture) =>
+      this.track(
+        new MeshPhysicalMaterial({
+          map,
+          alphaTest: 0.45,
+          roughness: 0.6,
+          sheen: 0.6,
+          sheenColor: new Color("#ffffff"),
+          sheenRoughness: 0.5,
+          bumpMap: height,
+          bumpScale: 1.6,
+          displacementMap: height,
+          displacementScale: 0.012,
+          displacementBias: -0.001,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+        }),
+      );
 
-    const dashedLine = (points: Vector3[]) => {
-      const geometry = this.track(new BufferGeometry().setFromPoints(points));
-      const line = new Line(geometry, dashed);
-      line.computeLineDistances();
-      return line;
+    const add = (group: Group, mesh: Mesh | InstancedMesh, shadow = true) => {
+      mesh.castShadow = shadow;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+      return mesh;
     };
 
-    // Copa: seis gomos, costuras com pesponto duplo, ilhoses bordados e debrum do arco traseiro.
-    const copa = this.part("copa");
-    copa.add(new Mesh(this.track(buildCrownGeometry()), crownMat));
-    for (const u of SEAM_US) {
-      copa.add(new Mesh(this.track(buildSeamTube(u)), crownMat));
-      copa.add(dashedLine(seamPoints(u, 0.0068, 0.0035)));
-      copa.add(dashedLine(seamPoints(u, -0.0068, 0.0035)));
-    }
-    copa.add(new Mesh(this.track(buildArchBindingTube()), crownMat));
-    const eyeletGeometry = this.track(new TorusGeometry(0.026, 0.008, 8, high ? 28 : 16));
-    const holeGeometry = this.track(new CircleGeometry(0.02, 18));
+    // Copa: seis gomos com costuras em relevo, abertura traseira com debrum.
+    const crown = new Group();
+    add(crown, new Mesh(this.track(high ? buildCrownGeometry() : buildCrownGeometry(0, 128, 48)), crownMat));
+    for (const u of SEAM_US) add(crown, new Mesh(this.track(buildSeamTube(u)), crownMat));
+    add(crown, new Mesh(this.track(buildArchBindingTube()), crownMat));
+
+    // Ilhoses bordados (um por gomo) e botão forrado.
+    const eyeletGeometry = this.track(new TorusGeometry(0.027, 0.0085, 10, high ? 32 : 18));
+    const holeGeometry = this.track(new CircleGeometry(0.019, 20));
     const zAxis = new Vector3(0, 0, 1);
+    const eyeletU = (k: number) => (0.5 + 1 / 12 + k / 6) % 1;
     for (let k = 0; k < 6; k += 1) {
-      const u = (0.5 + 1 / 12 + k / 6) % 1;
-      const v = 0.74;
+      const u = eyeletU(k);
+      const v = 0.72;
       const q = new Quaternion().setFromUnitVectors(zAxis, crownNormal(u, v));
-      const eyelet = new Mesh(eyeletGeometry, eyeletMat);
-      eyelet.position.copy(crownOffsetPoint(u, v, 0.004));
-      eyelet.quaternion.copy(q);
+      const ring = new Mesh(eyeletGeometry, eyeletMat);
+      ring.position.copy(crownOffsetPoint(u, v, 0.004));
+      ring.quaternion.copy(q);
       const hole = new Mesh(holeGeometry, holeMat);
-      hole.position.copy(crownOffsetPoint(u, v, 0.0015));
+      hole.position.copy(crownOffsetPoint(u, v, 0.0012));
       hole.quaternion.copy(q);
-      copa.add(eyelet, hole);
+      add(crown, ring, false);
+      crown.add(hole);
     }
-
-    // Botão forrado no topo.
-    const botao = this.part("botao");
     const apex = crownPoint(0, 1);
-    const button = new Mesh(this.track(new SphereGeometry(0.08, 28, 14)), crownMat);
-    button.position.set(apex.x, apex.y + 0.012, apex.z);
-    button.scale.set(1, 0.45, 1);
-    botao.add(button);
+    const button = new Mesh(this.track(new SphereGeometry(0.085, 32, 16)), crownMat);
+    button.position.set(apex.x, apex.y + 0.014, apex.z);
+    button.scale.set(1, 0.46, 1);
+    add(crown, button);
 
-    // Bordado frontal: recorte da foto real com relevo por deslocamento.
-    const bounds = embroideryBounds(aspect, 0.17, 0.64, 1.2);
-    const bordado = this.part("bordado");
-    bordado.add(
+    // Bordados: pônei (frente) e POLO (traseira), traçados das fotos.
+    const ponyBounds = patchBounds(pony.aspect, PONY.u, PONY.v0, PONY.v1, PONY.comp);
+    add(
+      crown,
       new Mesh(
-        this.track(
-          buildCrownPatch({
-            ...bounds,
-            segmentsU: high ? 140 : 70,
-            segmentsV: high ? 170 : 86,
-            offset: 0.009,
-            cutArch: false,
-            flipU: true,
-          }),
-        ),
-        embroideryMat,
+        this.track(buildCrownPatch({ ...ponyBounds, segmentsU: high ? 80 : 40, segmentsV: high ? 140 : 70, offset: 0.006, cutArch: false, flipU: true })),
+        embroideryMat(pony.map, pony.height),
       ),
+      false,
+    );
+    const poloBounds = patchBounds(polo.aspect, POLO.u, POLO.v0, POLO.v1, POLO.comp);
+    add(
+      crown,
+      new Mesh(
+        this.track(buildCrownPatch({ ...poloBounds, segmentsU: high ? 140 : 70, segmentsV: high ? 60 : 30, offset: 0.006, cutArch: false, flipU: true })),
+        embroideryMat(polo.map, polo.height),
+      ),
+      false,
     );
 
-    // Aba curva com pespontos concêntricos e sub-aba.
-    const aba = this.part("aba");
-    aba.add(new Mesh(this.track(buildBrimGeometry()), brimMat));
-    for (const row of brimStitchRows(8, 0.052)) aba.add(dashedLine(row));
-    const subaba = this.part("subaba");
-    subaba.add(new Mesh(this.track(buildUnderbrimGeometry()), underMat));
+    // Aba, sub-aba.
+    const brim = new Group();
+    add(brim, new Mesh(this.track(buildBrimGeometry(high ? 140 : 90, high ? 28 : 18)), brimMat));
 
-    // Interior: forro e faixa de conforto.
-    const forro = this.part("forro");
-    forro.add(new Mesh(this.track(buildCrownGeometry(-0.014)), liningMat));
+    // Interior visível pela abertura: forro e faixa.
+    const inside = new Group();
+    inside.add(new Mesh(this.track(buildCrownGeometry(-0.014)), liningMat));
     const archU = CAP.archHalfAngle / (Math.PI * 2);
-    const faixa = this.part("faixa");
-    faixa.add(new Mesh(this.track(buildBand(archU, 1 - archU, 0, 0.15, -0.02, 140)), sweatMat));
+    inside.add(new Mesh(this.track(buildBand(archU, 1 - archU, 0, 0.15, -0.02, 140)), sweatMat));
 
-    // Traseira convencional: tira do mesmo tecido com regulador metálico discreto.
-    const fecho = this.part("fecho");
-    const strapSpan = archU * 1.5;
-    fecho.add(new Mesh(this.track(buildBand(1 - strapSpan, 1 + strapSpan, 0.035, 0.105, 0.013, 48)), crownMat));
-    const buckleU = 0.05;
-    const buckleV = 0.07;
-    const buckleNormal = crownNormal(buckleU, buckleV);
-    const bucklePos = crownOffsetPoint(buckleU, buckleV, 0.026);
-    const buckleTarget = bucklePos.clone().add(buckleNormal);
-    for (const geometry of [buildBuckleGeometry(), buildBucklePinGeometry()]) {
-      const piece = new Mesh(this.track(geometry), metalMat);
+    // Tira de ajuste atravessando a abertura e fivela dourada (lado direito, vista de trás).
+    const back = new Group();
+    const strapSpan = archU * 1.42;
+    add(back, new Mesh(this.track(buildBand(1 - strapSpan, 1 + strapSpan, STRAP.v0, STRAP.v1, 0.012, 64)), crownMat));
+    // Ponta da tira passando pela fivela.
+    add(back, new Mesh(this.track(buildBand(BUCKLE.u - 0.03, BUCKLE.u + 0.012, STRAP.v0 + 0.006, STRAP.v1 - 0.006, 0.024, 16)), crownMat));
+    const buckleNormal = crownNormal(BUCKLE.u, BUCKLE.v);
+    const bucklePos = crownOffsetPoint(BUCKLE.u, BUCKLE.v, 0.03);
+    const up = crownPoint(BUCKLE.u, BUCKLE.v + 0.05).sub(crownPoint(BUCKLE.u, BUCKLE.v - 0.05)).normalize();
+    const buckleQ = new Quaternion().setFromRotationMatrix(
+      new Matrix4().makeBasis(new Vector3().crossVectors(up, buckleNormal).normalize(), up, buckleNormal),
+    );
+    const buckleFrame = new Mesh(this.track(buildBuckleGeometry(0.12, 0.2, 0.018)), brassMat);
+    const buckleBar = new Mesh(this.track(buildBucklePinGeometry(0.17)), brassMat);
+    for (const piece of [buckleFrame, buckleBar]) {
       piece.position.copy(bucklePos);
-      piece.lookAt(buckleTarget);
-      piece.scale.setScalar(0.85);
-      fecho.add(piece);
+      piece.quaternion.copy(buckleQ);
+      add(back, piece);
     }
 
-    // Âncoras para as anotações do plano frontal.
-    const tip = brimCenter();
-    this.anchors.bordado = { part: "bordado", point: crownOffsetPoint(0.5 + 0.06, 0.5, 0.03), normal: crownNormal(0.5, 0.5) };
-    this.anchors.ilhos = {
-      part: "copa",
-      point: crownOffsetPoint(0.5 + 1 / 12, 0.74, 0.01),
-      normal: crownNormal(0.5 + 1 / 12, 0.74),
-    };
-    this.anchors.aba = { part: "aba", point: tip.clone().add(new Vector3(0.38, 0.02, 0)), normal: new Vector3(0, 1, 0.4).normalize() };
-    this.anchors.botao = { part: "botao", point: apex.clone().add(new Vector3(0, 0.06, 0)), normal: null };
-    this.anchors.costura = {
-      part: "copa",
-      point: crownOffsetPoint(0.5 - 1 / 6, 0.5, 0.01),
-      normal: crownNormal(0.5 - 1 / 6, 0.5),
-    };
-    this.anchors.fecho = { part: "fecho", point: bucklePos.clone().addScaledVector(buckleNormal, 0.03), normal: buckleNormal.clone() };
+    // Pespontos reais: costuras dos gomos (duplos) e fileiras da aba.
+    const stitchGeometry = this.track(new SphereGeometry(0.5, 8, 4));
+    const stitchMatrices: Matrix4[] = [];
+    const center = new Vector3(0, 0.3, 0);
+    const crownNormalAt = (p: Vector3) => p.clone().sub(center).normalize();
+    const seamOpts = { pitch: 0.017, length: 0.011, width: 0.0042, lift: 0.004 };
+    for (const u of SEAM_US) {
+      stitchMatricesAlong(seamPoints(u, 0.0075, 0.003, 90), crownNormalAt, seamOpts, stitchMatrices);
+      stitchMatricesAlong(seamPoints(u, -0.0075, 0.003, 90), crownNormalAt, seamOpts, stitchMatrices);
+    }
+    const brimUp = () => new Vector3(0, 1, 0);
+    for (const row of brimStitchRows(8)) {
+      stitchMatricesAlong(row, brimUp, { pitch: 0.016, length: 0.0105, width: 0.0042, lift: 0.0006 }, stitchMatrices);
+    }
+    const stitches = new InstancedMesh(stitchGeometry, threadMat, stitchMatrices.length);
+    stitchMatrices.forEach((m, i) => stitches.setMatrixAt(i, m));
+    stitches.instanceMatrix.needsUpdate = true;
+    crown.add(stitches);
 
-    // Centraliza o boné (caixa delimitadora) no pivô de rotação e mede o enquadramento.
+    this.capRoot.add(crown, brim, inside, back);
+
+    // Âncoras (antes de centralizar; convertidas abaixo).
+    const tip = brimCenter();
+    const ponyMid = (PONY.v0 + PONY.v1) / 2;
+    const poloMid = (POLO.v0 + POLO.v1) / 2;
+    const sideU = 0.5 - 1 / 12 - 1 / 6; // gomo lateral voltado para +x
+    const raw: Record<AnchorId, { p: Vector3; n: Vector3 | null }> = {
+      pony: { p: crownOffsetPoint(PONY.u, ponyMid, 0.01), n: crownNormal(PONY.u, ponyMid) },
+      brim: { p: tip.clone().add(new Vector3(0.18, 0.01, -0.06)), n: new Vector3(0, 1, 0.35).normalize() },
+      eyelet: { p: crownOffsetPoint(sideU, 0.72, 0.01), n: crownNormal(sideU, 0.72) },
+      seam: { p: crownOffsetPoint(0.5 - 1 / 6, 0.42, 0.006), n: crownNormal(0.5 - 1 / 6, 0.42) },
+      polo: { p: crownOffsetPoint(POLO.u, poloMid, 0.01), n: crownNormal(POLO.u, poloMid) },
+      strap: { p: crownOffsetPoint(0.985, (STRAP.v0 + STRAP.v1) / 2, 0.02), n: crownNormal(0, 0.08) },
+      buckle: { p: bucklePos.clone().addScaledVector(buckleNormal, 0.012), n: buckleNormal.clone() },
+      button: { p: apex.clone().add(new Vector3(0, 0.05, 0)), n: null },
+    };
+
+    // Centraliza o boné e posiciona o chão de sombra sob a aba.
     const box = new Box3().setFromObject(this.capRoot);
-    const center = box.getCenter(new Vector3());
+    const c = box.getCenter(new Vector3());
     const size = box.getSize(new Vector3());
     this.modelWidth = size.x;
     this.modelHeight = size.y;
-    this.capRoot.position.set(-center.x, -center.y, -center.z);
-    this.pivot.add(this.capRoot);
-    this.scene.add(this.pivot);
+    this.capRoot.position.set(-c.x, -c.y, -c.z);
+    this.groundY = box.min.y - c.y - 0.002;
+    for (const id of ANCHOR_IDS) {
+      this.anchors[id] = raw[id].p.clone().sub(c);
+      this.anchorNormals[id] = raw[id].n;
+    }
+    this.scene.add(this.capRoot);
+
+    const ground = new Mesh(this.track(new PlaneGeometry(12, 12)), this.track(new ShadowMaterial({ opacity: 0.16 })));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = this.groundY;
+    ground.receiveShadow = true;
+    this.scene.add(ground);
+  }
+
+  /** Posição (espaço da cena) de uma âncora — usada pela narrativa como ponto de foco. */
+  anchor(id: FocusId): Vector3 {
+    return id === "center" ? new Vector3() : (this.anchors[id]?.clone() ?? new Vector3());
   }
 
   /* ───────────── Entrada (arraste, pinça, teclado) ───────────── */
@@ -465,15 +503,14 @@ export class CapStage {
 
   private readonly onPointerDown = (event: PointerEvent): void => {
     (event.currentTarget as HTMLCanvasElement).setPointerCapture(event.pointerId);
-    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    this.lastMove = { x: event.clientX, t: performance.now() };
-    this.velocityYaw = 0;
-    this.sway = false;
+    this.pointers.set(event.pointerId, new Vector2(event.clientX, event.clientY));
+    this.velocityAz = 0;
     this.userDecay = false;
+    this.lastMoveTime = performance.now();
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       if (a && b) {
-        this.pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
+        this.pinchStart = a.distanceTo(b);
         this.zoomAtPinch = this.userZoom;
       }
     }
@@ -483,60 +520,65 @@ export class CapStage {
   private readonly onPointerMove = (event: PointerEvent): void => {
     const previous = this.pointers.get(event.pointerId);
     if (!previous) return;
-    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (this.pointers.size === 2) {
-      const [a, b] = [...this.pointers.values()];
-      if (a && b && this.pinchStart > 0) {
-        this.setUserZoom(this.zoomAtPinch * (Math.hypot(a.x - b.x, a.y - b.y) / this.pinchStart));
-      }
-      return;
-    }
+    const now = performance.now();
     const dx = event.clientX - previous.x;
     const dy = event.clientY - previous.y;
-    const now = performance.now();
-    const dt = Math.max(1, now - this.lastMove.t) / 1000;
-    this.userYaw += dx * 0.009;
-    if (event.pointerType === "mouse") this.userPitch += dy * 0.006;
-    this.velocityYaw = (dx * 0.009) / dt;
-    this.lastMove = { x: event.clientX, t: now };
+    previous.set(event.clientX, event.clientY);
+    if (this.pointers.size === 2) {
+      const [a, b] = [...this.pointers.values()];
+      if (a && b && this.pinchStart > 0) this.setUserZoom(this.zoomAtPinch * (a.distanceTo(b) / this.pinchStart));
+      return;
+    }
+    const dt = Math.max(1, now - this.lastMoveTime) / 1000;
+    this.lastMoveTime = now;
+    const delta = -dx * 0.0085;
+    this.userAz += delta;
+    if (event.pointerType === "mouse") this.userEl += dy * 0.005;
+    this.velocityAz = delta / dt;
     this.dirty = true;
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
     this.pointers.delete(event.pointerId);
     if (this.pointers.size < 2) this.pinchStart = 0;
-    if (this.options.reducedMotion) this.velocityYaw = 0;
+    if (this.options.reducedMotion) this.velocityAz = 0;
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    const step = 0.26;
-    if (event.key === "ArrowLeft") this.userYaw -= step;
-    else if (event.key === "ArrowRight") this.userYaw += step;
-    else if (event.key === "ArrowUp") this.userPitch -= step * 0.6;
-    else if (event.key === "ArrowDown") this.userPitch += step * 0.6;
+    const step = 0.28;
+    if (event.key === "ArrowLeft") this.userAz += step;
+    else if (event.key === "ArrowRight") this.userAz -= step;
+    else if (event.key === "ArrowUp") this.userEl += step * 0.5;
+    else if (event.key === "ArrowDown") this.userEl -= step * 0.5;
     else if (event.key === "+" || event.key === "=") this.setUserZoom(this.userZoom * 1.15);
     else if (event.key === "-") this.setUserZoom(this.userZoom / 1.15);
     else return;
     event.preventDefault();
-    this.sway = false;
+    this.userDecay = false;
     this.dirty = true;
     this.options.onInteract?.();
   };
 
+  private readonly onContextLost = (event: Event): void => {
+    event.preventDefault();
+    this.setActive(false);
+    this.options.onContextLost?.();
+  };
+
   /* ───────────── API pública ───────────── */
 
-  /** Pose definida pela coreografia de rolagem. */
-  setPose(pose: Partial<Pose>, immediate = false): void {
+  /** Define o alvo da câmera/luz. `immediate` pula a suavização (primeiro quadro, movimento reduzido). */
+  setRig(rig: Partial<Rig>, immediate = false): void {
     let changed = false;
-    for (const key of Object.keys(pose) as Array<keyof Pose>) {
-      const value = pose[key];
-      if (value === undefined || Math.abs(this.base[key] - value) < 1e-4) continue;
-      this.base[key] = value;
+    for (const key of Object.keys(rig) as Array<keyof Rig>) {
+      const value = rig[key];
+      if (value === undefined || Math.abs(this.target[key] - value) < 1e-5) continue;
+      this.target[key] = value;
       if (immediate || this.options.reducedMotion) this.current[key] = value;
       changed = true;
     }
     if (changed) {
-      // Quando a rolagem avança, a rotação manual volta suavemente à coreografia.
+      // A rolagem retomou a direção: a rotação manual volta suavemente à coreografia.
       this.userDecay = true;
       this.dirty = true;
     }
@@ -553,15 +595,11 @@ export class CapStage {
   }
 
   resetView(): void {
-    this.userYaw = 0;
-    this.userPitch = 0;
+    this.userAz = 0;
+    this.userEl = 0;
     this.userZoom = 1;
-    this.velocityYaw = 0;
+    this.velocityAz = 0;
     this.dirty = true;
-  }
-
-  setSway(enabled: boolean): void {
-    this.sway = enabled && !this.options.reducedMotion;
   }
 
   resize(width: number, height: number): void {
@@ -585,9 +623,9 @@ export class CapStage {
     }
   }
 
-  /** Renderiza um quadro imediatamente (captura/verificação). */
+  /** Renderiza imediatamente (capturas de verificação). */
   renderNow(): void {
-    this.applyTransforms();
+    this.apply();
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -599,36 +637,46 @@ export class CapStage {
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerUp);
     canvas.removeEventListener("keydown", this.onKeyDown);
+    canvas.removeEventListener("webglcontextlost", this.onContextLost);
     for (const item of this.disposables) item.dispose();
+    this.key.shadow.map?.dispose();
     this.renderer.dispose();
   }
 
   /* ───────────── Loop ───────────── */
 
-  private applyTransforms(): void {
-    const c = this.current;
-    const pitch = Math.min(PITCH_LIMIT.max, Math.max(PITCH_LIMIT.min, c.pitch + this.userPitch));
-    const swayYaw = this.sway ? Math.sin(this.swayTime * 0.5) * 0.14 : 0;
-    this.pivot.rotation.set(pitch, c.yaw + this.userYaw + swayYaw, 0, "YXZ");
-    this.pivot.position.set(c.shift, c.lift, 0);
-    const eased = easeInOutCubic(Math.min(1, Math.max(0, c.explode)));
-    for (const id of PART_IDS) this.parts[id]?.position.copy(EXPLODE_OFFSETS[id]).multiplyScalar(eased);
-
-    // Enquadramento: largura-alvo em px (alinhada à foto) ou ajuste à caixa disponível.
+  /** Distância que enquadra o boné inteiro na área disponível. */
+  private fitDistance(): number {
     const tanHalf = Math.tan((this.camera.fov * Math.PI) / 360);
-    const fitWidthPx = Math.min(this.width * 0.86, (this.height * 0.92 * this.modelWidth) / this.modelHeight);
-    const targetPx = Math.min(this.frameWidthPx ?? fitWidthPx, fitWidthPx * 1.15);
-    const base = (this.modelWidth * this.height) / (2 * tanHalf * targetPx);
-    const distance = (base * (1 + eased * 0.75)) / (c.zoom * this.userZoom);
-    const elevation = 0.05;
-    this.camera.position.set(0, Math.sin(elevation) * distance, Math.cos(elevation) * distance);
-    this.camera.lookAt(0, -eased * 0.12, 0);
+    const landscape = this.width >= this.height;
+    const widthPx = Math.min(this.width * (landscape ? 0.5 : 0.84), (this.height * (landscape ? 0.62 : 0.5) * this.modelWidth) / this.modelHeight);
+    return (this.modelWidth * this.height) / (2 * tanHalf * widthPx);
   }
 
-  /** Largura (px) que o boné deve ocupar na vista frontal; null volta ao ajuste automático. */
-  setFrameWidth(px: number | null): void {
-    this.frameWidthPx = px && px > 0 ? px : null;
-    this.dirty = true;
+  private apply(): void {
+    const c = this.current;
+    const az = c.az + this.userAz;
+    const el = Math.min(EL_LIMIT.max, Math.max(EL_LIMIT.min, c.el + this.userEl));
+    const distance = (this.fitDistance() * c.dist) / this.userZoom;
+    const target = new Vector3(c.tx, c.ty, c.tz);
+    this.camera.position.set(
+      target.x + Math.sin(az) * Math.cos(el) * distance,
+      target.y + Math.sin(el) * distance,
+      target.z + Math.cos(az) * Math.cos(el) * distance,
+    );
+    this.camera.lookAt(target);
+    // Desloca o produto no quadro para compor com o texto (sem mover a câmera).
+    this.camera.setViewOffset(this.width, this.height, -c.frameX * this.width * 0.5, c.frameY * this.height * 0.5, this.width, this.height);
+
+    // Luzes seguem a câmera em torno do eixo vertical: o preto nunca fica sem forma.
+    this.lightRig.rotation.y = az;
+    this.key.intensity = 2.9 * c.key;
+    this.fill.intensity = 1.05 * c.fill;
+    this.rim.intensity = 1.7 * c.rim;
+    this.hemi.intensity = 0.12 + 0.6 * c.fill;
+    // A luz ambiente acompanha a principal: na abertura o boné surge como silhueta recortada.
+    this.scene.environmentIntensity = 0.1 + 0.52 * Math.min(1.1, c.key);
+    this.renderer.toneMappingExposure = c.exposure * 1.12;
   }
 
   private readonly tick = (): void => {
@@ -637,42 +685,35 @@ export class CapStage {
     this.lastTime = now;
     let moving = false;
 
-    if (Math.abs(this.velocityYaw) > 0.01 && this.pointers.size === 0) {
-      this.userYaw += this.velocityYaw * dt;
-      this.velocityYaw *= Math.exp(-4.2 * dt);
+    if (Math.abs(this.velocityAz) > 0.01 && this.pointers.size === 0) {
+      this.userAz += this.velocityAz * dt;
+      this.velocityAz *= Math.exp(-4 * dt);
       moving = true;
     }
-    if (this.userDecay && this.pointers.size === 0) {
-      this.userYaw = damp(this.userYaw, 0, 2.2, dt);
-      this.userPitch = damp(this.userPitch, 0, 2.2, dt);
-      if (Math.abs(this.userYaw) < 1e-3 && Math.abs(this.userPitch) < 1e-3) {
-        this.userYaw = 0;
-        this.userPitch = 0;
-        this.userDecay = false;
-      } else moving = true;
-    }
-    if (this.sway) {
-      this.swayTime += dt;
+    if (this.userDecay && this.pointers.size === 0 && (this.userAz !== 0 || this.userEl !== 0)) {
+      this.userAz = damp(this.userAz, 0, 1.6, dt);
+      this.userEl = damp(this.userEl, 0, 1.6, dt);
+      if (Math.abs(this.userAz) < 1e-3 && Math.abs(this.userEl) < 1e-3) {
+        this.userAz = 0;
+        this.userEl = 0;
+      }
       moving = true;
     }
-
-    for (const key of Object.keys(this.base) as Array<keyof Pose>) {
+    for (const key of Object.keys(this.target) as Array<keyof Rig>) {
       const before = this.current[key];
-      const lambda = key === "explode" ? 6 : 7.5;
-      this.current[key] = damp(before, this.base[key], lambda, dt);
-      if (Math.abs(this.current[key] - this.base[key]) < 1e-4) this.current[key] = this.base[key];
+      this.current[key] = damp(before, this.target[key], 6, dt);
+      if (Math.abs(this.current[key] - this.target[key]) < 1e-5) this.current[key] = this.target[key];
       if (this.current[key] !== before) moving = true;
     }
 
     if (!moving && !this.dirty) return;
     this.dirty = false;
-    this.applyTransforms();
+    this.apply();
     this.renderer.render(this.scene, this.camera);
     this.emitAnchors();
   };
 
   private readonly scratch = new Vector3();
-  private readonly scratchNormal = new Vector3();
   private readonly toCamera = new Vector3();
 
   private emitAnchors(): void {
@@ -680,31 +721,29 @@ export class CapStage {
     if (!onFrame) return;
     const out = {} as Record<AnchorId, ProjectedPoint>;
     for (const id of ANCHOR_IDS) {
-      const anchor = this.anchors[id];
-      const group = anchor ? this.parts[anchor.part] : undefined;
-      if (!anchor || !group) {
+      const p = this.anchors[id];
+      if (!p) {
         out[id] = { x: 0, y: 0, visible: false };
         continue;
       }
-      const world = group.localToWorld(this.scratch.copy(anchor.point));
+      const n = this.anchorNormals[id];
       let visible = true;
-      if (anchor.normal) {
-        this.scratchNormal.copy(anchor.normal).applyQuaternion(this.pivot.quaternion);
-        this.toCamera.copy(this.camera.position).sub(world).normalize();
-        visible = this.scratchNormal.dot(this.toCamera) > 0.15;
+      if (n) {
+        this.toCamera.copy(this.camera.position).sub(p).normalize();
+        visible = n.dot(this.toCamera) > 0.2;
       }
-      world.project(this.camera);
+      this.scratch.copy(p).project(this.camera);
       out[id] = {
-        x: (world.x * 0.5 + 0.5) * this.width,
-        y: (-world.y * 0.5 + 0.5) * this.height,
-        visible: visible && world.z < 1,
+        x: (this.scratch.x * 0.5 + 0.5) * this.width,
+        y: (-this.scratch.y * 0.5 + 0.5) * this.height,
+        visible: visible && this.scratch.z < 1 && Math.abs(this.scratch.x) < 1 && Math.abs(this.scratch.y) < 1,
       };
     }
     onFrame(out);
   }
 }
 
-/** Testa suporte a WebGL sem criar contexto pesado. */
+/** Testa suporte a WebGL sem manter contexto. */
 export function supportsWebGL(): boolean {
   try {
     const canvas = document.createElement("canvas");
@@ -713,4 +752,3 @@ export function supportsWebGL(): boolean {
     return false;
   }
 }
-

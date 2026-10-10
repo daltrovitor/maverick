@@ -61,7 +61,7 @@ export function ProductLineup({ items, instagramUrl }: { readonly items: LineupI
   );
 
   return (
-    <section ref={sectionRef} aria-labelledby="colecao-title" className="on-dark relative overflow-hidden bg-ink py-24 text-cream sm:py-32">
+    <section ref={sectionRef} id="colecao" aria-labelledby="colecao-title" className="on-dark relative overflow-hidden bg-ink py-24 text-cream sm:py-32">
       {/* Pesponto: motivo da aba usado como fio condutor entre a experiência e a loja */}
       <div aria-hidden="true" className="stitch-x absolute inset-x-0 top-6 text-gold/50" />
       <div className="mx-auto max-w-[1440px] px-4 sm:px-8">

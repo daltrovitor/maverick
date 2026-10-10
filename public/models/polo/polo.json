@@ -1,0 +1,15 @@
+{
+  "source": "polo-back.png",
+  "crop": [
+    150,
+    80,
+    216,
+    110
+  ],
+  "size": [
+    2347,
+    1024
+  ],
+  "aspect": 2.292,
+  "note": "Contorno tra\u00e7ado dos pixels da foto; foto de origem em baixa resolu\u00e7\u00e3o."
+}

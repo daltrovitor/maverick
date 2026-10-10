@@ -64,6 +64,32 @@ function writeStored(lines: CartLine[]) {
   }
 }
 
+interface ServerLines {
+  next: CartLine[];
+  changed: boolean;
+}
+
+/** Confere preço e estoque atuais no servidor e devolve a sacola ajustada (sem tocar no estado). */
+async function fetchServerLines(stored: StoredLine[], previous: readonly CartLine[]): Promise<ServerLines> {
+  const fresh = await refreshCartLines(stored.map((s) => s.variantId));
+  const byId = new Map(fresh.map((f) => [f.variantId, f]));
+  let changed = false;
+  const next: CartLine[] = [];
+  for (const s of stored) {
+    const snap = byId.get(s.variantId);
+    if (!snap || snap.stock <= 0) {
+      changed = true;
+      continue;
+    }
+    const quantity = Math.min(s.quantity, snap.stock, MAX_QTY);
+    if (quantity !== s.quantity) changed = true;
+    const before = previous.find((l) => l.variantId === s.variantId);
+    if (before && before.unitPriceCents !== snap.unitPriceCents) changed = true;
+    next.push({ ...snap, quantity });
+  }
+  return { next, changed };
+}
+
 export function CartProvider({ children }: { readonly children: ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [ready, setReady] = useState(false);
@@ -75,46 +101,40 @@ export function CartProvider({ children }: { readonly children: ReactNode }) {
     linesRef.current = lines;
   }, [lines]);
 
-  const reconcile = useCallback(async (stored: StoredLine[]) => {
-    if (stored.length === 0) {
-      setLines([]);
-      return;
-    }
-    setRefreshing(true);
-    try {
-      const fresh = await refreshCartLines(stored.map((s) => s.variantId));
-      const byId = new Map(fresh.map((f) => [f.variantId, f]));
-      let changed = false;
-      const next: CartLine[] = [];
-      for (const s of stored) {
-        const snap = byId.get(s.variantId);
-        if (!snap || snap.stock <= 0) {
-          changed = true;
-          continue;
-        }
-        const quantity = Math.min(s.quantity, snap.stock, MAX_QTY);
-        if (quantity !== s.quantity) changed = true;
-        const previous = linesRef.current.find((l) => l.variantId === s.variantId);
-        if (previous && previous.unitPriceCents !== snap.unitPriceCents) changed = true;
-        next.push({ ...snap, quantity });
-      }
-      setLines(next);
-      writeStored(next);
-      setNotice(changed ? "Atualizamos sua sacola com preços e estoque atuais." : null);
-    } finally {
-      setRefreshing(false);
-    }
+  const applyLines = useCallback(({ next, changed }: ServerLines) => {
+    setLines(next);
+    writeStored(next);
+    setNotice(changed ? "Atualizamos sua sacola com preços e estoque atuais." : null);
   }, []);
 
-  // Hidratação: lê o navegador só depois de montar (evita divergência SSR/cliente).
+  const reconcile = useCallback(
+    async (stored: StoredLine[]) => {
+      if (stored.length === 0) {
+        setLines([]);
+        return;
+      }
+      setRefreshing(true);
+      try {
+        applyLines(await fetchServerLines(stored, linesRef.current));
+      } finally {
+        setRefreshing(false);
+      }
+    },
+    [applyLines],
+  );
+
+  // Hidratação: lê o navegador só depois de montar (evita divergência SSR/cliente). Até lá
+  // `ready` é falso e a interface já mostra o carregamento; sacola vazia é o estado inicial.
   useEffect(() => {
-    void reconcile(readStored()).finally(() => setReady(true));
+    const stored = readStored();
+    const hydrate = stored.length > 0 ? fetchServerLines(stored, linesRef.current).then(applyLines) : Promise.resolve();
+    void hydrate.finally(() => setReady(true));
     const onStorage = (event: StorageEvent) => {
       if (event.key === STORAGE_KEY) void reconcile(readStored());
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [reconcile]);
+  }, [applyLines, reconcile]);
 
   const commit = useCallback((next: CartLine[]) => {
     linesRef.current = next;

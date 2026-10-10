@@ -7,6 +7,7 @@ import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
 import { SCROLL_LOCK_EVENT, type ScrollLockDetail } from "@/lib/scrollLock";
+import { REDUCED_MOTION_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
 
@@ -21,12 +22,6 @@ function LenisBridge() {
 
   useEffect(() => {
     if (!lenis) return;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const applyMotionPreference = () => {
-      lenis.options.smoothWheel = !reducedMotion.matches;
-    };
-    applyMotionPreference();
-    reducedMotion.addEventListener("change", applyMotionPreference);
 
     // Intro em tela cheia (ou outros overlays) podem travar/destravar a rolagem.
     const onLock = (event: Event) => {
@@ -37,10 +32,7 @@ function LenisBridge() {
     window.addEventListener(SCROLL_LOCK_EVENT, onLock);
     if (document.documentElement.hasAttribute("data-scroll-locked")) lenis.stop();
 
-    return () => {
-      reducedMotion.removeEventListener("change", applyMotionPreference);
-      window.removeEventListener(SCROLL_LOCK_EVENT, onLock);
-    };
+    return () => window.removeEventListener(SCROLL_LOCK_EVENT, onLock);
   }, [lenis]);
 
   return null;
@@ -53,6 +45,8 @@ function LenisBridge() {
  */
 export function SmoothScrollProvider({ children }: { children: ReactNode }) {
   const lenisRef = useRef<LenisRef>(null);
+  // Com movimento reduzido a roda do mouse rola de forma nativa (o Lenis é recriado ao mudar).
+  const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
 
   useEffect(() => {
     // Lê a instância a cada frame: ela só existe depois do efeito interno do ReactLenis.
@@ -74,6 +68,7 @@ export function SmoothScrollProvider({ children }: { children: ReactNode }) {
           lerp: 0.08,
           duration: 1.2,
           autoRaf: false,
+          smoothWheel: !reducedMotion,
           anchors: { offset: HEADER_OFFSET },
         }}
       >

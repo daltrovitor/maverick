@@ -4,7 +4,16 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useTransition,
+  type FormEvent,
+} from "react";
 import { CreditCard, QrCode } from "lucide-react";
 import { formatBRL, formatCep, onlyDigits, UFS } from "@/lib/br";
 import { placeOrder, quoteCheckout, type QuoteResult } from "@/app/(site)/checkout/actions";
@@ -21,6 +30,9 @@ interface Props {
 }
 
 type Method = "pix" | "card";
+
+/** O cupom guardado só muda por ação desta própria aba; não há o que assinar. */
+const subscribeNothing = () => () => {};
 
 interface FormState {
   name: string;
@@ -53,12 +65,15 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
     notes: "",
   });
   const [method, setMethod] = useState<Method | null>(pixAvailable ? "pix" : cardAvailable ? "card" : null);
-  const [couponInput, setCouponInput] = useState("");
+  // Código vindo de link de afiliado (?cupom=): pré-preenche; o banco decide se ainda vale.
+  const storedCoupon = useSyncExternalStore(subscribeNothing, readStoredCoupon, () => "");
+  const [typedCoupon, setTypedCoupon] = useState<string | null>(null);
+  const couponInput = typedCoupon ?? storedCoupon;
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
   const [couponError, setCouponError] = useState<string | null>(null);
-  const [quote, setQuote] = useState<QuoteResult | null>(null);
+  const [lastQuote, setLastQuote] = useState<QuoteResult | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
-  const [quoting, setQuoting] = useState(false);
+  const [settledQuoteKey, setSettledQuoteKey] = useState<string | null>(null);
   const [cepStatus, setCepStatus] = useState<"idle" | "loading" | "found" | "not_found">("idle");
   const [formError, setFormError] = useState<{ message: string; field?: string } | null>(null);
   const [pending, startTransition] = useTransition();
@@ -68,11 +83,12 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
 
   const items = useMemo(() => lines.map((l) => ({ variantId: l.variantId, quantity: l.quantity })), [lines]);
 
-  // Código vindo de link de afiliado (?cupom=): pré-preenche; o banco decide se ainda vale.
-  useEffect(() => {
-    const stored = readStoredCoupon();
-    if (stored) setCouponInput(stored);
-  }, []);
+  // Cotação: só existe com sacola, UF e carrinho hidratado; "calculando" enquanto a resposta
+  // para a combinação atual (sacola, UF, cupom, e-mail) não chegou.
+  const quoteKey =
+    ready && items.length > 0 && form.uf ? JSON.stringify([items, form.uf, appliedCoupon, form.email]) : null;
+  const quote = quoteKey ? lastQuote : null;
+  const quoting = quoteKey !== null && settledQuoteKey !== quoteKey;
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((f) => ({ ...f, [key]: value }));
 
   // Autopreenchimento pelo CEP (ViaCEP).
@@ -104,12 +120,8 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
 
   // Recalcula frete/desconto/total no servidor sempre que sacola, UF ou cupom mudam.
   useEffect(() => {
-    if (!ready || items.length === 0 || !form.uf) {
-      setQuote(null);
-      return;
-    }
+    if (!quoteKey) return;
     let cancelled = false;
-    setQuoting(true);
     const timer = window.setTimeout(async () => {
       const result = await quoteCheckout({
         items,
@@ -118,15 +130,15 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
         email: form.email || undefined,
       });
       if (cancelled) return;
-      setQuoting(false);
+      setSettledQuoteKey(quoteKey);
       if (result.ok) {
-        setQuote(result);
+        setLastQuote(result);
         setQuoteError(null);
       } else if (result.field === "coupon") {
         setCouponError(result.message);
         setAppliedCoupon(null);
       } else {
-        setQuote(null);
+        setLastQuote(null);
         setQuoteError(result.message);
       }
     }, 250);
@@ -134,7 +146,7 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [ready, items, form.uf, appliedCoupon, form.email]);
+  }, [quoteKey, items, form.uf, appliedCoupon, form.email]);
 
   const applyCoupon = () => {
     const code = couponInput.trim().toUpperCase();
@@ -332,7 +344,7 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
             <input
               id="coupon"
               value={couponInput}
-              onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+              onChange={(e) => setTypedCoupon(e.target.value.toUpperCase())}
               placeholder="Cupom de desconto"
               className="min-h-12 w-full rounded-sm border border-line-strong bg-paper px-3 text-sm uppercase placeholder:normal-case"
               aria-invalid={couponError ? true : undefined}
@@ -349,7 +361,7 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
           ) : quote?.couponCode ? (
             <p className="mt-2 text-xs text-success">
               Cupom {quote.couponCode} aplicado.{" "}
-              <button type="button" className="underline" onClick={() => { setAppliedCoupon(null); setCouponInput(""); }}>
+              <button type="button" className="underline" onClick={() => { setAppliedCoupon(null); setTypedCoupon(""); }}>
                 Remover
               </button>
             </p>

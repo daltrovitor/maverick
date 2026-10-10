@@ -1,5 +1,6 @@
 // Hello World
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AffiliateForm } from "@/components/affiliates/AffiliateForm";
 
 export const metadata: Metadata = {
@@ -63,9 +64,9 @@ export default function AffiliatesPage() {
               <li>
                 <strong className="text-ink">Seus dados.</strong> Coletamos apenas o necessário para validar a identidade,
                 evitar duplicidade e falar com você. Detalhes na{" "}
-                <a href="/politicas/privacidade" className="underline">
+                <Link href="/politicas/privacidade" className="underline">
                   Política de Privacidade
-                </a>
+                </Link>
                 .
               </li>
               <li>

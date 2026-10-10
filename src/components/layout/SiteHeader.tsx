@@ -22,7 +22,9 @@ export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }
   const pathname = usePathname();
   const { count, open, ready } = useCart();
   const [scrolled, setScrolled] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // O menu fica aberto só na rota em que foi aberto: navegar o fecha sem efeito extra.
+  const [menuPath, setMenuPath] = useState<string | null>(null);
+  const menuOpen = menuPath === pathname;
   const menuRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -38,9 +40,6 @@ export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }
     if (menuOpen && !dialog.open) dialog.showModal();
     if (!menuOpen && dialog.open) dialog.close();
   }, [menuOpen]);
-
-  // Fecha o menu ao navegar.
-  useEffect(() => setMenuOpen(false), [pathname]);
 
   const dark = overDark && !scrolled;
   const tone = dark ? "text-cream" : "text-ink";
@@ -92,7 +91,7 @@ export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }
           </button>
           <button
             type="button"
-            onClick={() => setMenuOpen(true)}
+            onClick={() => setMenuPath(pathname)}
             className="grid size-12 place-items-center rounded-sm md:hidden"
             aria-label="Abrir menu"
             aria-haspopup="dialog"
@@ -104,7 +103,7 @@ export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }
 
       <dialog
         ref={menuRef}
-        onClose={() => setMenuOpen(false)}
+        onClose={() => setMenuPath(null)}
         aria-label="Menu"
         className="fixed inset-0 m-0 h-dvh max-h-dvh w-full max-w-none bg-ink p-0 text-cream on-dark backdrop:bg-transparent"
       >
@@ -113,7 +112,7 @@ export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }
             <MaverickLogo variant="monogram" className="h-7 text-cream" title="Maverick" />
             <button
               type="button"
-              onClick={() => setMenuOpen(false)}
+              onClick={() => setMenuPath(null)}
               className="grid size-12 place-items-center rounded-sm"
               aria-label="Fechar menu"
             >

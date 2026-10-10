@@ -1,6 +1,6 @@
 // Hello World
 /**
- * Geometria procedural do boné Maverick.
+ * Geometria procedural do boné principal da Maverick (dad hat de seis gomos).
  *
  * A copa é uma superfície paramétrica P(u, v):
  *  - u ∈ [0, 1) percorre a circunferência; u = 0 é o centro da nuca e u = 0.5 a testa;
@@ -20,21 +20,26 @@ import {
 } from "three";
 
 export const CAP = {
+  /* Proporções calibradas pela foto frontal do boné principal (dad hat de seis gomos). */
   radiusX: 1.0,
-  radiusZ: 1.12,
-  apexHeight: 0.84,
-  frontBulge: 0.22,
-  apexBack: 0.08,
+  radiusZ: 1.08,
+  apexHeight: 0.68,
+  frontBulge: 0.12,
+  apexBack: 0.12,
   /** Curvatura lateral da aba pré-curvada (y = −k·x²). */
-  brimBend: 0.26,
+  brimBend: 0.62,
   /** Inclinação da aba para baixo conforme avança. */
-  brimSlope: 0.12,
-  brimHalfAngle: 1.05,
-  brimWidth: 0.92,
-  brimThickness: 0.03,
-  brimBevel: 0.01,
-  archHalfAngle: 0.4,
-  archHeight: 0.3,
+  brimSlope: 0.1,
+  brimHalfAngle: 0.9,
+  brimWidth: 0.58,
+  brimThickness: 0.026,
+  brimBevel: 0.012,
+  archHalfAngle: 0.42,
+  archHeight: 0.24,
+  /** Afunilamento da copa rumo ao botão (maior = topo mais estreito, como na foto). */
+  crownTaper: 1.55,
+  /** Quanto a frente fica mais "em pé" que as laterais (painel frontal do bordado). */
+  frontUpright: 0.75,
 } as const;
 
 const TAU = Math.PI * 2;
@@ -69,7 +74,7 @@ export function crownPoint(u: number, v: number, target = new Vector3()): Vector
   const a = angleOf(u);
   const e = Math.min(1, Math.max(0, v)) * (Math.PI / 2);
   const front = Math.max(0, Math.sin(a));
-  const exponent = 0.92 - 0.2 * front;
+  const exponent = CAP.crownTaper - CAP.frontUpright * front;
   const cosE = Math.max(0, Math.cos(e));
   const r = Math.pow(cosE, exponent);
   const height = Math.sin(e) * (CAP.apexHeight + CAP.frontBulge * front * cosE);

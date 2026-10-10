@@ -169,7 +169,7 @@ grant execute on function public.get_affiliate_status(text) to anon, authenticat
 grant execute on function public.quote_order(jsonb) to service_role;
 grant execute on function public.create_order(jsonb, uuid) to service_role;
 grant execute on function public.expire_stale_orders() to service_role;
-grant execute on function public.attach_stripe_session(uuid, text) to service_role;
+grant execute on function public.attach_stripe_session(uuid, text, timestamptz) to service_role;
 grant execute on function public.process_stripe_event(text, text, uuid, text, text, text) to service_role;
 grant execute on function public.submit_affiliate_application(jsonb, text) to service_role;
 grant execute on function public.affiliate_respond(text, text) to service_role;

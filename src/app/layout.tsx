@@ -1,29 +1,36 @@
 // Hello World
 import type { Metadata, Viewport } from "next";
-import { Geist, Instrument_Serif } from "next/font/google";
-import { BrandSprites } from "@/components/brand/BrandSprites";
-import { AppProviders } from "@/components/providers/AppProviders";
+import { Archivo, Cinzel, JetBrains_Mono } from "next/font/google";
+import { Toaster } from "@/components/ui/Toaster";
+import { siteUrl } from "@/lib/env";
 import "./globals.css";
 
 /*
- * Apenas duas famílias, pré-carregadas e com fallback métrico ajustado. `display: "optional"`:
- * se a fonte não chegar no período de bloqueio, o fallback fica até o fim da visita — sem troca
- * tardia, a quebra de linha do título monumental nunca desloca o layout (CLS 0).
+ * Três famílias: Archivo (interface + tipografia monumental condensada pelo eixo wdth),
+ * Cinzel (serifa romana em caixa alta, eco do wordmark oficial) e JetBrains Mono
+ * (micro-anotações do plano frontal). `display: "swap"` com fallback métrico ajustado.
  */
-const geist = Geist({
+const archivo = Archivo({
   subsets: ["latin"],
-  variable: "--font-geist",
-  display: "optional",
+  axes: ["wdth"],
+  variable: "--font-archivo",
+  display: "swap",
   fallback: ["system-ui", "-apple-system", "Segoe UI", "Roboto", "Arial", "sans-serif"],
 });
 
-const instrumentSerif = Instrument_Serif({
+const cinzel = Cinzel({
   subsets: ["latin"],
-  weight: "400",
-  style: ["normal", "italic"],
-  variable: "--font-instrument",
-  display: "optional",
-  fallback: ["Iowan Old Style", "Georgia", "serif"],
+  variable: "--font-cinzel",
+  display: "swap",
+  fallback: ["Georgia", "serif"],
+});
+
+const jetbrains = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-jetbrains",
+  display: "swap",
+  fallback: ["ui-monospace", "Consolas", "monospace"],
 });
 
 export const viewport: Viewport = {
@@ -33,55 +40,45 @@ export const viewport: Viewport = {
   themeColor: "#ffffff",
 };
 
+const DESCRIPTION =
+  "Maverick Capshop — curadoria em headwear. Bonés escolhidos um a um, com Pix ou cartão e envio para todo o Brasil.";
+
 export const metadata: Metadata = {
-  title: "ViraWeb × Maverick — Proposta de Parceria Estratégica",
-  description:
-    "Proposta interativa da ViraWeb para a Maverick Headwear & Lifestyle: e-commerce de alta conversão com boné em 3D, programa de afiliados, linha Maverick Gym e máquina de conteúdo orgânico em troca de 25% de equity e 25% dos lucros.",
-  applicationName: "ViraWeb × Maverick",
-  authors: [{ name: "ViraWeb", url: "https://viraweb.online" }],
-  creator: "ViraWeb",
-  keywords: [
-    "Maverick Headwear",
-    "ViraWeb",
-    "e-commerce de bonés",
-    "boné premium",
-    "parceria tech partner",
-    "venture studio",
-  ],
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: "Maverick Capshop — Headwear & Lifestyle",
+    template: "%s · Maverick Capshop",
+  },
+  description: DESCRIPTION,
+  applicationName: "Maverick Capshop",
+  keywords: ["bonés", "boné premium", "dad hat", "trucker", "headwear", "Maverick Capshop"],
   openGraph: {
-    title: "ViraWeb × Maverick — Do conceito ao domínio do mercado",
-    description:
-      "E-commerce com boné 3D interativo, afiliados, linha Gym e simulador do acordo de 25% equity + 25% lucros.",
     type: "website",
     locale: "pt_BR",
-    siteName: "ViraWeb × Maverick",
+    siteName: "Maverick Capshop",
+    title: "Maverick Capshop — Headwear & Lifestyle",
+    description: DESCRIPTION,
+    images: [{ url: "/brand/og.png", width: 1200, height: 630, alt: "Maverick — Headwear & Lifestyle" }],
   },
   twitter: {
-    card: "summary",
-    title: "ViraWeb × Maverick — Proposta de Parceria Estratégica",
-    description: "A infraestrutura digital definitiva para a Maverick Headwear & Lifestyle.",
+    card: "summary_large_image",
+    title: "Maverick Capshop — Headwear & Lifestyle",
+    description: DESCRIPTION,
+    images: ["/brand/og.png"],
   },
   icons: {
-    icon: [
-      { url: "/icon.png", type: "image/png" },
-      { url: "/favicon.png", type: "image/png" },
-    ],
+    icon: [{ url: "/icon.png", type: "image/png" }],
     apple: [{ url: "/apple-icon.png", type: "image/png" }],
-    shortcut: ["/favicon.png"],
   },
   formatDetection: { telephone: false },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="pt-BR"
-      className={`${geist.variable} ${instrumentSerif.variable}`}
-      suppressHydrationWarning
-    >
-      <body className="min-h-dvh bg-white text-ink antialiased selection:bg-[#1f1612] selection:text-white" suppressHydrationWarning>
-        <BrandSprites />
-        <AppProviders>{children}</AppProviders>
+    <html lang="pt-BR" className={`${archivo.variable} ${cinzel.variable} ${jetbrains.variable}`} suppressHydrationWarning>
+      <body className="min-h-dvh bg-paper text-ink antialiased" suppressHydrationWarning>
+        {children}
+        <Toaster />
       </body>
     </html>
   );

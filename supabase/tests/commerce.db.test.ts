@@ -241,7 +241,7 @@ describe("Stripe", () => {
     const { variantId } = await saveProduct("cartao", 2);
     const order = await createOrder(orderPayload(variantId, 1, { payment_method: "card" }));
     await t.as("service_role", null, () =>
-      t.db.query("select public.attach_stripe_session($1, 'cs_test_1')", [order.id]),
+      t.db.query("select public.attach_stripe_session($1, 'cs_test_1', now() + interval '1 hour')", [order.id]),
     );
     const call = (eventId: string, outcome: string) =>
       t.as("service_role", null, () =>
@@ -260,6 +260,20 @@ describe("Stripe", () => {
       t.call<string>(`select public.process_stripe_event('evt_3', 'checkout.session.async_payment_failed', $1, null, null, 'failed') as r`, [failed.id]),
     );
     expect(r).toBe("failed");
+    expect(await stockOf(variantId)).toBe(1);
+  });
+
+  it("nova sessão substitui a antiga e eventos da sessão antiga são ignorados", async () => {
+    const { variantId } = await saveProduct("cartao-nova-sessao", 2);
+    const order = await createOrder(orderPayload(variantId, 1, { payment_method: "card" }));
+    await t.as("service_role", null, async () => {
+      await t.db.query("select public.attach_stripe_session($1, 'cs_old', now() + interval '1 hour')", [order.id]);
+      await t.db.query("select public.attach_stripe_session($1, 'cs_new', now() + interval '1 hour')", [order.id]);
+    });
+    const old = await t.as("service_role", null, () =>
+      t.call<string>(`select public.process_stripe_event('evt_old', 'checkout.session.expired', $1, 'cs_old', null, 'expired') as r`, [order.id]),
+    );
+    expect(old).toBe("ignored");
     expect(await stockOf(variantId)).toBe(1);
   });
 

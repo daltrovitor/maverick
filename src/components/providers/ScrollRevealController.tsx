@@ -2,6 +2,7 @@
 "use client";
 
 import { useRef } from "react";
+import { usePathname } from "next/navigation";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
@@ -14,6 +15,8 @@ gsap.registerPlugin(useGSAP, ScrollTrigger);
  */
 export function ScrollRevealController() {
   const scope = useRef<HTMLSpanElement>(null);
+  // Navegações do App Router trocam a página sem remontar o layout: reprocessa a cada rota.
+  const pathname = usePathname();
 
   useGSAP(
     (context, contextSafe) => {
@@ -52,7 +55,7 @@ export function ScrollRevealController() {
       const frame = requestAnimationFrame(setup);
       return () => cancelAnimationFrame(frame);
     },
-    { scope },
+    { scope, dependencies: [pathname], revertOnUpdate: true },
   );
 
   return <span ref={scope} hidden />;

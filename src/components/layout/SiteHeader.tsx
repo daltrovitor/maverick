@@ -1,146 +1,139 @@
 // Hello World
 "use client";
 
-import { useEffect, useState } from "react";
-import * as m from "motion/react-m";
-import { AnimatePresence } from "motion/react";
-import { Menu, RotateCcw, X } from "lucide-react";
-import { MaverickMonogram } from "@/components/brand/MaverickMonogram";
-import { replayPartnershipIntro } from "@/components/brand/PartnershipIntro";
-import { ViraWebLogo } from "@/components/brand/ViraWebLogo";
-import { NAV_ITEMS } from "@/lib/content";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { Menu, X } from "lucide-react";
+import { MaverickLogo } from "@/components/brand/MaverickLogo";
+import { useCart } from "@/components/cart/CartProvider";
 
-export function SiteHeader() {
-  const [open, setOpen] = useState(false);
+const NAV = [
+  { href: "/loja", label: "Coleção" },
+  { href: "/afiliados", label: "Afiliados" },
+  { href: "/conta", label: "Conta" },
+] as const;
+
+/**
+ * Cabeçalho fixo e discreto: monograma à esquerda, navegação em micro-tipografia e a sacola.
+ * Sobre a abertura escura da página inicial ele inverte para creme até a rolagem começar.
+ */
+export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }) {
+  const pathname = usePathname();
+  const { count, open, ready } = useCart();
   const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 8);
+    const onScroll = () => setScrolled(window.scrollY > 24);
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+    const dialog = menuRef.current;
+    if (!dialog) return;
+    if (menuOpen && !dialog.open) dialog.showModal();
+    if (!menuOpen && dialog.open) dialog.close();
+  }, [menuOpen]);
+
+  // Fecha o menu ao navegar.
+  useEffect(() => setMenuOpen(false), [pathname]);
+
+  const dark = overDark && !scrolled;
+  const tone = dark ? "text-cream" : "text-ink";
 
   return (
     <header
-      data-site-header
-      className={`sticky top-0 z-40 border-b bg-white transition-colors duration-300 ${
-        scrolled ? "border-line" : "border-transparent"
-      }`}
+      className={`sticky top-0 z-40 transition-[background-color,border-color,color] duration-300 ${
+        dark ? "border-b border-transparent bg-transparent on-dark" : "border-b border-line bg-paper/92 backdrop-blur-md"
+      } ${tone}`}
     >
-      <div className="mx-auto flex h-16 max-w-[1320px] items-center justify-between gap-4 px-4 sm:px-6 lg:px-10">
-        <a
-          href="#alianca"
-          className="flex min-h-12 items-center gap-2.5 rounded-xs sm:gap-3"
-        >
-          <ViraWebLogo className="h-6 w-auto sm:h-7" />
-          <span className="hidden font-sans text-[15px] font-semibold tracking-tight text-navy sm:inline">ViraWeb</span>
-          <span aria-hidden="true" className="font-mono text-xs text-muted">
-            ×
-          </span>
-          <MaverickMonogram className="h-6 w-auto sm:h-7" />
-          <span className="font-display text-[15px] tracking-[0.22em] text-ink sm:text-[17px]">MAVERICK</span>
-          <span className="sr-only">, voltar ao início</span>
-        </a>
+      <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:h-[72px] sm:px-8">
+        <Link href="/" className="flex min-h-12 items-center gap-3" aria-label="Maverick — página inicial">
+          <MaverickLogo variant="monogram" className="h-7 sm:h-8" />
+          <span className="type-brand hidden text-[0.95rem] sm:inline">Maverick</span>
+        </Link>
 
-        <nav aria-label="Seções da proposta" className="hidden lg:block">
+        <nav aria-label="Principal" className="hidden md:block">
           <ul className="flex items-center gap-1">
-            {NAV_ITEMS.map((item) => (
-              <li key={item.href}>
-                <a
-                  href={item.href}
-                  className="inline-flex min-h-12 items-center rounded-xs px-3 text-sm text-ink-soft transition-colors hover:text-ink"
-                >
-                  {item.label}
-                </a>
-              </li>
-            ))}
+            {NAV.map((item) => {
+              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              return (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    className={`type-micro inline-flex min-h-12 items-center px-4 transition-opacity hover:opacity-100 ${
+                      active ? "opacity-100 underline decoration-gold underline-offset-[6px]" : "opacity-75"
+                    }`}
+                  >
+                    {item.label}
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         </nav>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={replayPartnershipIntro}
-            aria-label="Rever a animação de abertura da proposta"
-            className="hidden min-h-11 items-center gap-1.5 rounded-sm border border-line bg-surface px-3 text-xs font-semibold text-ink-soft transition-colors hover:border-ink hover:text-ink hover:bg-cream cursor-pointer sm:inline-flex"
+            onClick={open}
+            className="type-micro inline-flex min-h-12 items-center gap-2 rounded-sm px-3 hover:opacity-80"
+            aria-label={`Abrir sacola${ready && count > 0 ? `, ${count} ${count === 1 ? "item" : "itens"}` : ""}`}
           >
-            <RotateCcw className="size-3.5 text-[#b48328]" aria-hidden="true" />
-            <span>Rever animação</span>
+            Sacola
+            <span className="tabular" aria-hidden="true">
+              ({ready ? count : 0})
+            </span>
           </button>
-          <a
-            href="#proposta"
-            className="hidden min-h-11 items-center rounded-sm bg-ink px-4 text-sm font-medium text-white transition-colors hover:bg-espresso sm:inline-flex"
-          >
-            Ver o acordo
-          </a>
           <button
             type="button"
-            onClick={() => setOpen((value) => !value)}
-            aria-expanded={open}
-            aria-controls="menu-mobile"
-            aria-label={open ? "Fechar menu" : "Abrir menu"}
-            className="inline-flex size-12 items-center justify-center rounded-sm text-ink lg:hidden"
+            onClick={() => setMenuOpen(true)}
+            className="grid size-12 place-items-center rounded-sm md:hidden"
+            aria-label="Abrir menu"
+            aria-haspopup="dialog"
           >
-            {open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}
+            <Menu className="size-5" aria-hidden="true" />
           </button>
         </div>
       </div>
 
-      <AnimatePresence>
-        {open && (
-          <m.nav
-            id="menu-mobile"
-            aria-label="Seções da proposta"
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ type: "spring", stiffness: 300, damping: 28 }}
-            className="border-t border-line bg-white lg:hidden"
-          >
-            <ul className="mx-auto max-w-[1320px] px-4 py-2 sm:px-6">
-              {NAV_ITEMS.map((item, index) => (
-                <li key={item.href} className="border-b border-line last:border-b-0">
-                  <a
-                    href={item.href}
-                    onClick={() => setOpen(false)}
-                    className="flex min-h-12 items-center justify-between py-3 font-serif text-2xl text-ink"
-                  >
+      <dialog
+        ref={menuRef}
+        onClose={() => setMenuOpen(false)}
+        aria-label="Menu"
+        className="fixed inset-0 m-0 h-dvh max-h-dvh w-full max-w-none bg-ink p-0 text-cream on-dark backdrop:bg-transparent"
+      >
+        <div className="flex h-full flex-col px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
+          <div className="flex h-16 items-center justify-between">
+            <MaverickLogo variant="monogram" className="h-7 text-cream" title="Maverick" />
+            <button
+              type="button"
+              onClick={() => setMenuOpen(false)}
+              className="grid size-12 place-items-center rounded-sm"
+              aria-label="Fechar menu"
+            >
+              <X className="size-6" aria-hidden="true" />
+            </button>
+          </div>
+          <nav aria-label="Menu móvel" className="mt-10">
+            <ul className="grid gap-2">
+              {[{ href: "/", label: "Início" }, ...NAV].map((item) => (
+                <li key={item.href}>
+                  <Link href={item.href} className="type-monument block py-2 text-5xl text-cream">
                     {item.label}
-                    <span className="tabular font-mono text-xs text-muted">{String(index + 1).padStart(2, "0")}</span>
-                  </a>
+                  </Link>
                 </li>
               ))}
-              <li className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpen(false);
-                    replayPartnershipIntro();
-                  }}
-                  aria-label="Rever a animação de abertura da proposta"
-                  className="flex w-full min-h-12 items-center justify-between py-2 font-mono text-sm font-semibold uppercase tracking-wider text-ink cursor-pointer"
-                >
-                  <span className="flex items-center gap-2">
-                    <RotateCcw className="size-4 text-[#b48328]" aria-hidden="true" />
-                    Rever animação
-                  </span>
-                  <span className="font-mono text-xs text-muted">INTRO</span>
-                </button>
-              </li>
             </ul>
-          </m.nav>
-        )}
-      </AnimatePresence>
+          </nav>
+          <p className="type-micro mt-auto text-gold-light">Headwear &amp; Lifestyle · Est. 2026</p>
+        </div>
+      </dialog>
     </header>
   );
 }

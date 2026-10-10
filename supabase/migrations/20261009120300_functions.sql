@@ -622,7 +622,13 @@ $$;
 -- =====================================================================================
 -- STRIPE
 -- =====================================================================================
-create or replace function public.attach_stripe_session(p_order_id uuid, p_session_id text)
+-- Vincula a sessão de checkout ao pedido. Uma nova sessão (cliente voltou depois que a
+-- anterior expirou) substitui a antiga: eventos da sessão antiga passam a ser ignorados.
+create or replace function public.attach_stripe_session(
+  p_order_id uuid,
+  p_session_id text,
+  p_session_expires_at timestamptz
+)
 returns void
 language plpgsql
 security definer
@@ -630,10 +636,12 @@ set search_path = ''
 as $$
 begin
   update public.orders
-  set stripe_checkout_session_id = p_session_id
+  set stripe_checkout_session_id = p_session_id,
+      -- Margem de 30 min após a sessão: o webhook de expiração chega antes da varredura.
+      expires_at = greatest(coalesce(expires_at, now()), p_session_expires_at + interval '30 minutes')
   where id = p_order_id
     and payment_method = 'card'
-    and (stripe_checkout_session_id is null or stripe_checkout_session_id = p_session_id);
+    and status = 'awaiting_payment';
   if not found then
     perform public._fail('invalid_transition', 'attach_session');
   end if;

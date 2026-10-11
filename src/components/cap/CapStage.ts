@@ -102,7 +102,10 @@ const ANCHOR_NORMALS: Readonly<Record<AnchorId, readonly [number, number, number
 };
 
 const EL_LIMIT = { min: -0.25, max: 1.05 } as const;
-const ZOOM_LIMIT = { min: 0.75, max: 2 } as const;
+/** Maior extensão do boné na tela (coordenadas normalizadas, 1 = borda da área). */
+const FIT_LIMIT = 0.93;
+/** Quantos vértices do modelo entram na conta de enquadramento (amostra uniforme). */
+const FIT_SAMPLES = 480;
 /** Entrada: espera a abertura da marca sair de cima e então desce girando. */
 const ENTRANCE_S = 2.2;
 const ENTRANCE_DELAY_S = 0.35;
@@ -169,13 +172,15 @@ export class CapStage {
   private readonly current: Rig = { ...DEFAULT_RIG };
   private userAz = 0;
   private userEl = 0;
-  private userZoom = 1;
   private velocityAz = 0;
   private userDecay = false;
   private pointers = new Map<number, Vector2>();
-  private pinchStart = 0;
-  private zoomAtPinch = 1;
   private lastMoveTime = 0;
+
+  /** Guarda de enquadramento: afasta a câmera se alguma parte do boné fosse sair da área. */
+  private fitSamples: Float32Array = new Float32Array(0);
+  private fitGoal = 1;
+  private fitScale = 1;
 
   /** Entrada (0 → 1), flutuação contínua e inclinação na direção do cursor. */
   private entrance = 1;
@@ -270,6 +275,7 @@ export class CapStage {
     const size = box.getSize(new Vector3());
     model.position.sub(center);
     this.pivot.add(model);
+    this.fitSamples = this.sampleVertices(model, center);
     this.frameWidth = Math.max(size.x, size.z);
     this.frameHeight = size.y;
     this.groundY = box.min.y - center.y - 0.002;
@@ -284,6 +290,22 @@ export class CapStage {
     ground.receiveShadow = true;
     this.scene.add(ground);
     this.dirty = true;
+  }
+
+  /** Amostra uniforme de vértices de todas as peças, no espaço do pivô. */
+  private sampleVertices(model: Group, center: Vector3): Float32Array {
+    const all: number[] = [];
+    model.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      const position = (object.geometry as BufferGeometry).getAttribute("position");
+      if (!position) return;
+      for (let i = 0; i < position.count; i += 1) all.push(position.getX(i), position.getY(i), position.getZ(i));
+    });
+    const count = all.length / 3;
+    const step = Math.max(1, Math.floor(count / FIT_SAMPLES));
+    const out: number[] = [];
+    for (let i = 0; i < count; i += step) out.push(all[i * 3]! - center.x, all[i * 3 + 1]! - center.y, all[i * 3 + 2]! - center.z);
+    return new Float32Array(out);
   }
 
   private track<T extends BufferGeometry | Material | Texture>(item: T): T {
@@ -321,13 +343,6 @@ export class CapStage {
     this.velocityAz = 0;
     this.userDecay = false;
     this.lastMoveTime = performance.now();
-    if (this.pointers.size === 2) {
-      const [a, b] = [...this.pointers.values()];
-      if (a && b) {
-        this.pinchStart = a.distanceTo(b);
-        this.zoomAtPinch = this.userZoom;
-      }
-    }
     this.options.onInteract?.();
   };
 
@@ -346,11 +361,7 @@ export class CapStage {
     const dx = event.clientX - previous.x;
     const dy = event.clientY - previous.y;
     previous.set(event.clientX, event.clientY);
-    if (this.pointers.size === 2) {
-      const [a, b] = [...this.pointers.values()];
-      if (a && b && this.pinchStart > 0) this.setUserZoom(this.zoomAtPinch * (a.distanceTo(b) / this.pinchStart));
-      return;
-    }
+    if (this.pointers.size > 1) return;
     const dt = Math.max(1, now - this.lastMoveTime) / 1000;
     this.lastMoveTime = now;
     const delta = -dx * 0.0085;
@@ -362,7 +373,6 @@ export class CapStage {
 
   private readonly onPointerUp = (event: PointerEvent): void => {
     this.pointers.delete(event.pointerId);
-    if (this.pointers.size < 2) this.pinchStart = 0;
     if (this.options.reducedMotion) this.velocityAz = 0;
   };
 
@@ -377,8 +387,6 @@ export class CapStage {
     else if (event.key === "ArrowRight") this.userAz -= step;
     else if (event.key === "ArrowUp") this.userEl += step * 0.5;
     else if (event.key === "ArrowDown") this.userEl -= step * 0.5;
-    else if (event.key === "+" || event.key === "=") this.setUserZoom(this.userZoom * 1.15);
-    else if (event.key === "-") this.setUserZoom(this.userZoom / 1.15);
     else return;
     event.preventDefault();
     this.userDecay = false;
@@ -411,20 +419,10 @@ export class CapStage {
     }
   }
 
-  setUserZoom(zoom: number): void {
-    this.userZoom = Math.min(ZOOM_LIMIT.max, Math.max(ZOOM_LIMIT.min, zoom));
-    this.dirty = true;
-  }
-
-  zoomBy(factor: number): void {
-    this.setUserZoom(this.userZoom * factor);
-    this.options.onInteract?.();
-  }
-
+  /** Desfaz a rotação manual (volta ao enquadramento da apresentação). */
   resetView(): void {
     this.userAz = 0;
     this.userEl = 0;
-    this.userZoom = 1;
     this.velocityAz = 0;
     this.dirty = true;
   }
@@ -452,6 +450,8 @@ export class CapStage {
 
   /** Renderiza imediatamente (capturas de verificação). */
   renderNow(): void {
+    this.apply();
+    this.fitScale = this.fitGoal;
     this.apply();
     this.renderer.render(this.scene, this.camera);
   }
@@ -486,18 +486,35 @@ export class CapStage {
 
   private readonly poseQuat = new Quaternion();
 
-  private apply(): void {
-    const c = this.current;
-    const az = c.az + this.userAz;
-    const el = Math.min(EL_LIMIT.max, Math.max(EL_LIMIT.min, c.el + this.userEl));
-    const distance = (this.fitDistance() * c.dist) / this.userZoom;
-    const target = new Vector3(c.tx, c.ty, c.tz);
+  private placeCamera(az: number, el: number, distance: number, target: Vector3): void {
     this.camera.position.set(
       target.x + Math.sin(az) * Math.cos(el) * distance,
       target.y + Math.sin(el) * distance,
       target.z + Math.cos(az) * Math.cos(el) * distance,
     );
     this.camera.lookAt(target);
+    this.camera.updateMatrixWorld();
+  }
+
+  private readonly fitPoint = new Vector3();
+
+  /** Maior |x| ou |y| (coordenadas normalizadas da tela) entre os vértices amostrados. */
+  private projectedExtent(): number {
+    const samples = this.fitSamples;
+    const m = this.pivot.matrixWorld;
+    let extent = 0;
+    for (let i = 0; i < samples.length; i += 3) {
+      this.fitPoint.set(samples[i]!, samples[i + 1]!, samples[i + 2]!).applyMatrix4(m).project(this.camera);
+      extent = Math.max(extent, Math.abs(this.fitPoint.x), Math.abs(this.fitPoint.y));
+    }
+    return extent;
+  }
+
+  private apply(): void {
+    const c = this.current;
+    const az = c.az + this.userAz;
+    const el = Math.min(EL_LIMIT.max, Math.max(EL_LIMIT.min, c.el + this.userEl));
+    const target = new Vector3(c.tx, c.ty, c.tz);
     this.camera.setViewOffset(this.width, this.height, -c.frameX * this.width * 0.5, c.frameY * this.height * 0.5, this.width, this.height);
 
     // Pose: coreografia + entrada (desce girando) + flutuação + cursor.
@@ -517,6 +534,17 @@ export class CapStage {
       "YXZ",
     );
     this.pivot.scale.setScalar(0.86 + 0.14 * Math.min(1, 1 - drop));
+    this.pivot.updateMatrixWorld();
+
+    // Câmera no enquadramento da tomada; se alguma parte do boné (com a pose atual) fosse sair
+    // da área, afasta o necessário. Na entrada o boné vem de cima: a guarda não persegue a queda.
+    const base = this.fitDistance() * c.dist;
+    this.placeCamera(az, el, base, target);
+    if (this.fitSamples.length > 0 && this.entrance >= 1) {
+      this.fitGoal = Math.max(1, this.projectedExtent() / FIT_LIMIT);
+      if (this.fitScale < 1.0001 && this.fitGoal < 1.0001) this.fitScale = 1;
+    }
+    if (this.fitScale !== 1) this.placeCamera(az, el, base * this.fitScale, target);
 
     // Luzes seguem a câmera em torno do eixo vertical: o preto nunca fica sem forma.
     this.lightRig.rotation.y = az;
@@ -543,6 +571,10 @@ export class CapStage {
     }
     this.hover.x = damp(this.hover.x, this.hover.tx, 4, dt);
     this.hover.y = damp(this.hover.y, this.hover.ty, 4, dt);
+    if (Math.abs(this.fitScale - this.fitGoal) > 1e-4) {
+      this.fitScale = damp(this.fitScale, this.fitGoal, this.fitGoal > this.fitScale ? 18 : 3, dt);
+      moving = true;
+    }
     if (Math.abs(this.velocityAz) > 0.01 && this.pointers.size === 0) {
       this.userAz += this.velocityAz * dt;
       this.velocityAz *= Math.exp(-4 * dt);

@@ -42,7 +42,7 @@ STRAP = [0.024, 0.024, 0.026]  # tira traseira (linear)
 
 # Bordados medidos nas fotos: recorte (com margem), caixa da linha bordada e tamanho relativo à
 # largura da copa vista de frente/de trás. `rise` = altura do centro, em fração da altura da copa.
-PONY = {"photo": "polo-hd-front.png", "box": (340, 286, 70, 121), "ink": (350, 296, 50, 101), "height": 0.229, "rise": 0.5, "offset_x": -0.022}
+PONY = {"photo": "polo-hd-front.png", "box": (340, 286, 70, 121), "ink": (350, 296, 50, 101), "height": 0.229, "rise": 0.587, "offset_x": -0.022}
 POLO = {"photo": "polo-hd-back.png", "box": (314, 358, 126, 48), "ink": (322, 365, 109, 33), "width": 0.229, "rise": 0.47, "offset_x": -0.018}
 
 CT = {5126: np.float32, 5125: np.uint32, 5123: np.uint16, 5121: np.uint8}

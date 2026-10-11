@@ -8,7 +8,6 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { SplitText } from "gsap/SplitText";
 import { useGSAP } from "@gsap/react";
 import { useLenis } from "lenis/react";
-import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { AnchorId, CapStage, ProjectedPoint, Rig } from "@/components/cap/CapStage";
 import { INTRO_EXIT_EVENT } from "@/components/brand/introGate";
 import { ACTS, actAt, rigAt } from "@/components/landing/cinematicActs";
@@ -58,7 +57,6 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
   const cinematic = !reducedMotion && !webglFailed;
   const [act, setAct] = useState(0);
   const [ready, setReady] = useState(false);
-  const [interacted, setInteracted] = useState(false);
   const lenis = useLenis();
 
   const applyRig = useCallback((progress: number, immediate = false) => {
@@ -136,7 +134,6 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         reducedMotion: false,
         quality: coarse || window.innerWidth < 768 ? "low" : "high",
         onFrame,
-        onInteract: () => setInteracted(true),
         onContextLost: () => setWebglFailed(true),
       });
       try {
@@ -309,12 +306,12 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         {/* Plano médio: o boné tem área própria — nunca passa por baixo nem por cima do texto. */}
         <div
           ref={stageBoxRef}
-          className="absolute inset-x-0 top-16 bottom-[calc(var(--acts-h)+2.5rem)] md:top-6 md:right-16 md:bottom-24 md:left-[40%] lg:right-44"
+          className="absolute inset-x-0 top-3 bottom-[calc(var(--acts-h)+2rem)] md:top-4 md:right-16 md:bottom-4 md:left-[40%] lg:right-44"
         >
           <canvas
             ref={canvasRef}
             tabIndex={0}
-            aria-label="Boné em 3D. Arraste para girar; setas do teclado giram e + ou − aproximam."
+            aria-label="Boné em 3D. Arraste ou use as setas do teclado para girar."
             className={`h-full w-full touch-pan-y outline-none transition-opacity duration-1000 focus-visible:outline-2 focus-visible:outline-gold-ink ${
               ready ? "cursor-grab opacity-100 active:cursor-grabbing" : "opacity-0"
             }`}
@@ -441,30 +438,6 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
           </ol>
         </nav>
 
-        {/* Controles do visualizador */}
-        <div className="absolute top-3 right-3 flex items-center gap-2 md:top-auto md:right-10 md:bottom-8">
-          {ready ? (
-            <>
-              <span
-                className={`type-micro mr-1 hidden text-muted transition-opacity duration-500 sm:inline ${
-                  interacted && act !== 6 ? "opacity-0" : "opacity-100"
-                }`}
-              >
-                Arraste para girar
-              </span>
-              <StageButton label="Afastar" onClick={() => stageRef.current?.zoomBy(1 / 1.2)}>
-                <Minus className="size-4" aria-hidden="true" />
-              </StageButton>
-              <StageButton label="Aproximar" onClick={() => stageRef.current?.zoomBy(1.2)}>
-                <Plus className="size-4" aria-hidden="true" />
-              </StageButton>
-              <StageButton label="Voltar ao enquadramento da apresentação" onClick={() => stageRef.current?.resetView()}>
-                <RotateCcw className="size-4" aria-hidden="true" />
-              </StageButton>
-            </>
-          ) : null}
-        </div>
-
         {/* Progresso da apresentação */}
         <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-px bg-line">
           <div ref={progressRef} className="h-full origin-left scale-x-0 bg-gold" />
@@ -475,27 +448,5 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         </p>
       </div>
     </section>
-  );
-}
-
-function StageButton({
-  label,
-  onClick,
-  children,
-}: {
-  readonly label: string;
-  readonly onClick: () => void;
-  readonly children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className="grid size-12 place-items-center rounded-sm border border-line-strong bg-paper/85 text-ink backdrop-blur-sm transition-colors hover:border-ink"
-    >
-      {children}
-    </button>
   );
 }

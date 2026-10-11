@@ -5,7 +5,7 @@
 export type ModelAnchorId = "pony" | "polo" | "brim" | "eyelet" | "seam" | "strap" | "button";
 
 export const MODEL_ANCHORS: Readonly<Record<ModelAnchorId, readonly [number, number, number]>> = {
-  pony: [-0.0288, 0.6538, 0.9202],
+  pony: [-0.0299, 0.7704, 0.8598],
   polo: [0.017, 0.6135, -0.9945],
   brim: [0.0009, 0.3727, 1.4473],
   eyelet: [0.8093, 0.8903, -0.0847],

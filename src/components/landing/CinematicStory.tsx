@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { SplitText } from "gsap/SplitText";
@@ -10,6 +10,7 @@ import { useGSAP } from "@gsap/react";
 import { useLenis } from "lenis/react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { AnchorId, CapStage, ProjectedPoint, Rig } from "@/components/cap/CapStage";
+import { INTRO_EXIT_EVENT } from "@/components/brand/introGate";
 import { ACTS, actAt, rigAt } from "@/components/landing/cinematicActs";
 import { StaticPresentation } from "@/components/landing/StaticPresentation";
 import { MaverickLogo } from "@/components/brand/MaverickLogo";
@@ -44,9 +45,11 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
   const lineRefs = useRef<Array<SVGLineElement | null>>([]);
   const dotRefs = useRef<Array<SVGCircleElement | null>>([]);
   const progressRef = useRef<HTMLDivElement>(null);
+  const stickyRef = useRef<HTMLDivElement>(null);
+  const actsRef = useRef<HTMLDivElement>(null);
   const actRef = useRef(0);
   const scrollProgress = useRef(0);
-  const composeRef = useRef(1);
+  const boxSize = useRef({ w: 1, h: 1 });
   const calibrationRef = useRef<Partial<Rig> | null>(null);
 
   // Movimento reduzido, sem WebGL ou contexto perdido: apresentação estática.
@@ -65,13 +68,16 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
       stage.setRig({ tx: 0, ty: 0, tz: 0, key: 1, fill: 0.72, rim: 0.85, exposure: 1.02, ...calibrationRef.current }, true);
       return;
     }
-    const rig: Rig = rigAt(progress, (id) => stage.anchor(id), composeRef.current);
+    const rig: Rig = rigAt(progress, (id) => stage.anchor(id));
     stage.setRig(rig, immediate);
   }, []);
 
-  // Etiquetas e linhas-guia atualizadas direto no DOM a cada quadro renderizado.
+  // Etiquetas e linhas-guia atualizadas direto no DOM a cada quadro renderizado, sempre dentro
+  // da área do boné (nunca sobre o texto dos atos).
   const onFrame = useCallback((anchors: Readonly<Record<AnchorId, ProjectedPoint>>) => {
     const list = ACTS[actRef.current]?.annotations ?? [];
+    const { w, h } = boxSize.current;
+    const widths = labelRefs.current.map((el) => el?.offsetWidth ?? 0);
     for (let i = 0; i < MAX_LABELS; i += 1) {
       const label = labelRefs.current[i];
       const line = lineRefs.current[i];
@@ -85,9 +91,13 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         dot.style.opacity = "0";
         continue;
       }
-      const dir = item.side === "right" ? 1 : -1;
-      const lx = point.x + dir * LABEL_OFFSET;
-      const ly = point.y - 30;
+      const labelW = widths[i] ?? 0;
+      let dir = item.side === "right" ? 1 : -1;
+      // Sem espaço do lado pedido, a etiqueta vai para o outro lado do ponto.
+      if (dir > 0 && point.x + LABEL_OFFSET + labelW > w - 8) dir = -1;
+      else if (dir < 0 && point.x - LABEL_OFFSET - labelW < 8) dir = 1;
+      const lx = dir > 0 ? Math.min(point.x + LABEL_OFFSET, w - labelW - 8) : Math.max(point.x - LABEL_OFFSET, labelW + 8);
+      const ly = Math.min(h - 20, Math.max(20, point.y - 30));
       label.style.opacity = "1";
       label.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(${dir > 0 ? "0" : "-100%"}, -50%)`;
       line.setAttribute("x1", String(point.x));
@@ -111,12 +121,7 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
     let disposed = false;
     let observer: IntersectionObserver | null = null;
     let resizer: ResizeObserver | null = null;
-    const media = window.matchMedia("(min-width: 768px)");
-    const syncCompose = () => {
-      composeRef.current = media.matches ? 1 : 0;
-      applyRig(scrollProgress.current, true);
-    };
-    media.addEventListener("change", syncCompose);
+    let stopIntroWait = () => {};
 
     const start = async () => {
       const mod = await import("@/components/cap/CapStage");
@@ -148,25 +153,37 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
       }
       stageRef.current = stage;
       const box = stageBoxRef.current;
+      boxSize.current = { w: box.clientWidth, h: box.clientHeight };
       stage.resize(box.clientWidth, box.clientHeight);
-      composeRef.current = media.matches ? 1 : 0;
       applyRig(scrollProgress.current, true);
       resizer = new ResizeObserver(([entry]) => {
-        if (entry) stage.resize(entry.contentRect.width, entry.contentRect.height);
+        if (!entry) return;
+        boxSize.current = { w: entry.contentRect.width, h: entry.contentRect.height };
+        stage.resize(entry.contentRect.width, entry.contentRect.height);
       });
       resizer.observe(box);
       observer = new IntersectionObserver(([entry]) => stage.setActive(Boolean(entry?.isIntersecting)), {
         rootMargin: "200px",
       });
       if (sectionRef.current) observer.observe(sectionRef.current);
-      setReady(true);
+      // O boné entra (desce girando) junto com a página: depois da abertura da marca, se houver.
+      const reveal = () => {
+        setReady(true);
+        stage.playEntrance();
+      };
+      if (document.documentElement.dataset.intro === "playing") {
+        window.addEventListener(INTRO_EXIT_EVENT, reveal, { once: true });
+        stopIntroWait = () => window.removeEventListener(INTRO_EXIT_EVENT, reveal);
+      } else {
+        reveal();
+      }
     };
 
     const idle = window.setTimeout(() => void start(), 60);
     return () => {
       disposed = true;
       window.clearTimeout(idle);
-      media.removeEventListener("change", syncCompose);
+      stopIntroWait();
       observer?.disconnect();
       resizer?.disconnect();
       stageRef.current?.dispose();
@@ -174,11 +191,29 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
     };
   }, [applyRig, onFrame, cinematic]);
 
-  // Linha do tempo: rolagem → câmera (contínua) + tipografia e palavras de fundo (GSAP).
+  // Celular: mede o texto mais alto dos atos; a área do boné termina acima dele.
+  useEffect(() => {
+    const acts = actsRef.current;
+    const sticky = stickyRef.current;
+    if (!cinematic || !acts || !sticky) return;
+    const panels = [...acts.querySelectorAll<HTMLElement>("[data-act]")];
+    const measure = () => {
+      const tallest = Math.max(0, ...panels.map((panel) => panel.offsetHeight));
+      acts.style.height = `${tallest}px`;
+      sticky.style.setProperty("--acts-h", `${tallest}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    panels.forEach((panel) => observer.observe(panel));
+    return () => observer.disconnect();
+  }, [cinematic]);
+
+  // Linha do tempo: rolagem → câmera, luz e pose do boné (contínua) + tipografia (GSAP).
   useGSAP(
-    () => {
-      if (!cinematic || !sectionRef.current) return;
+    (_context, contextSafe) => {
+      if (!cinematic || !sectionRef.current || !contextSafe) return;
       const section = sectionRef.current;
+      let stopIntroWait = () => {};
 
       ScrollTrigger.create({
         trigger: section,
@@ -196,21 +231,31 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         },
       });
 
-      const build = () => {
+      // contextSafe: a linha do tempo nasce depois das fontes (assíncrono) e ainda é desfeita ao desmontar.
+      const build = contextSafe(() => {
         const tl = gsap.timeline({
           defaults: { ease: "power3.out" },
           scrollTrigger: { trigger: section, start: "top top", end: "bottom bottom", scrub: 0.8 },
         });
         const blocks = gsap.utils.toArray<HTMLElement>("[data-act]", section);
-        const words = gsap.utils.toArray<HTMLElement>("[data-word]", section);
         blocks.forEach((block, i) => {
           const range = ACTS[i]!.range;
           const split = SplitText.create(block.querySelectorAll("[data-split]"), { type: "lines", mask: "lines" });
           const extra = block.querySelectorAll("[data-fade]");
           const inAt = Math.max(0, range[0] + 0.004);
           if (i === 0) {
-            // O primeiro ato já começa visível (sem tela vazia na chegada).
-            gsap.set(split.lines, { yPercent: 0 });
+            if (document.documentElement.dataset.intro === "playing") {
+              // Abertura da marca na tela: o primeiro ato sobe quando ela começa a sair.
+              gsap.set(split.lines, { yPercent: 115 });
+              const reveal = contextSafe(() => {
+                gsap.to(split.lines, { yPercent: 0, duration: 1.25, stagger: 0.08, ease: "expo.out", delay: 0.3 });
+              });
+              window.addEventListener(INTRO_EXIT_EVENT, reveal, { once: true });
+              stopIntroWait = () => window.removeEventListener(INTRO_EXIT_EVENT, reveal);
+            } else {
+              // Sem abertura, o primeiro ato já começa visível (sem tela vazia na chegada).
+              gsap.set(split.lines, { yPercent: 0 });
+            }
           } else {
             tl.fromTo(split.lines, { yPercent: 115 }, { yPercent: 0, duration: 0.022, stagger: 0.006 }, inAt);
             if (extra.length) tl.fromTo(extra, { autoAlpha: 0, y: 12 }, { autoAlpha: 1, y: 0, duration: 0.02 }, inAt + 0.012);
@@ -221,17 +266,13 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
             if (extra.length) tl.to(extra, { autoAlpha: 0, duration: 0.014, ease: "power2.in" }, outAt);
           }
         });
-        words.forEach((word, i) => {
-          const [a, b] = ACTS[i]!.range;
-          if (i > 0) tl.fromTo(word, { autoAlpha: 0, scale: 1.06 }, { autoAlpha: 1, scale: 1, duration: 0.03, ease: "power2.out" }, a);
-          if (i < words.length - 1) tl.to(word, { autoAlpha: 0, scale: 0.97, duration: 0.025, ease: "power2.in" }, b - 0.02);
-        });
         tl.set({}, {}, 1);
-      };
+      });
 
       // As linhas dependem das fontes carregadas para quebrar corretamente.
       if (document.fonts?.status === "loaded") build();
       else document.fonts?.ready.then(build).catch(build);
+      return () => stopIntroWait();
     },
     { scope: sectionRef, dependencies: [cinematic] },
   );
@@ -260,23 +301,16 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         Pular a apresentação
       </a>
 
-      <div className="sticky top-16 h-[calc(100dvh-4rem)] overflow-hidden sm:top-[72px] sm:h-[calc(100dvh-72px)]">
-        {/* Plano de fundo: palavra monumental do ato */}
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 grid place-items-center md:pl-[20%]">
-          {ACTS.map((a, i) => (
-            <span
-              key={a.id}
-              data-word
-              className="type-monument absolute w-full px-4 text-center text-[clamp(4rem,17vw,17rem)] whitespace-nowrap text-[#efe7d8]"
-              style={{ opacity: i === 0 ? 1 : 0 }}
-            >
-              {a.word}
-            </span>
-          ))}
-        </div>
-
-        {/* Plano médio: boné 3D */}
-        <div ref={stageBoxRef} className="absolute inset-0">
+      <div
+        ref={stickyRef}
+        className="sticky top-16 h-[calc(100dvh-4rem)] overflow-hidden sm:top-[72px] sm:h-[calc(100dvh-72px)]"
+        style={{ "--acts-h": "15rem" } as CSSProperties}
+      >
+        {/* Plano médio: o boné tem área própria — nunca passa por baixo nem por cima do texto. */}
+        <div
+          ref={stageBoxRef}
+          className="absolute inset-x-0 top-16 bottom-[calc(var(--acts-h)+2.5rem)] md:top-6 md:right-16 md:bottom-24 md:left-[40%] lg:right-44"
+        >
           <canvas
             ref={canvasRef}
             tabIndex={0}
@@ -286,57 +320,57 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
             }`}
           />
           {!ready ? (
-            <div className="pointer-events-none absolute inset-0 grid place-items-center md:pl-[30%]" role="status">
+            <div className="pointer-events-none absolute inset-0 grid place-items-center" role="status">
               <div className="flex flex-col items-center gap-4 text-ink-soft">
                 <MaverickLogo variant="monogram" className="h-10 animate-[fade-up_1.2s_var(--ease-out-expo)_both] text-ink/80" />
                 <span className="type-micro">Preparando o boné em 3D</span>
               </div>
             </div>
           ) : null}
+
+          {/* Anotações ancoradas no modelo, presas dentro desta área */}
+          <svg aria-hidden="true" className="pointer-events-none absolute inset-0 hidden h-full w-full md:block">
+            {Array.from({ length: MAX_LABELS }, (_, i) => (
+              <g key={i}>
+                <line
+                  ref={(el) => {
+                    lineRefs.current[i] = el;
+                  }}
+                  stroke="#86611d"
+                  strokeWidth="1"
+                  strokeDasharray="3 4"
+                  style={{ opacity: 0, transition: "opacity .4s" }}
+                />
+                <circle
+                  ref={(el) => {
+                    dotRefs.current[i] = el;
+                  }}
+                  r="3.5"
+                  fill="#b88a2e"
+                  style={{ opacity: 0, transition: "opacity .4s" }}
+                />
+              </g>
+            ))}
+          </svg>
+          <div aria-hidden="true" className="pointer-events-none absolute inset-0 hidden md:block">
+            {Array.from({ length: MAX_LABELS }, (_, i) => (
+              <div
+                key={i}
+                ref={(el) => {
+                  labelRefs.current[i] = el;
+                }}
+                className="type-micro absolute top-0 left-0 rounded-xs border border-line bg-paper/90 px-2.5 py-1.5 whitespace-nowrap text-ink shadow-[0_6px_20px_-12px_rgba(38,23,10,0.5)] backdrop-blur-sm"
+                style={{ opacity: 0, transition: "opacity .4s" }}
+              >
+                {current.annotations[i]?.label}
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* Plano frontal: anotações ancoradas no modelo */}
-        <svg aria-hidden="true" className="pointer-events-none absolute inset-0 hidden h-full w-full md:block">
-          {Array.from({ length: MAX_LABELS }, (_, i) => (
-            <g key={i}>
-              <line
-                ref={(el) => {
-                  lineRefs.current[i] = el;
-                }}
-                stroke="#86611d"
-                strokeWidth="1"
-                strokeDasharray="3 4"
-                style={{ opacity: 0, transition: "opacity .4s" }}
-              />
-              <circle
-                ref={(el) => {
-                  dotRefs.current[i] = el;
-                }}
-                r="3.5"
-                fill="#b88a2e"
-                style={{ opacity: 0, transition: "opacity .4s" }}
-              />
-            </g>
-          ))}
-        </svg>
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 hidden md:block">
-          {Array.from({ length: MAX_LABELS }, (_, i) => (
-            <div
-              key={i}
-              ref={(el) => {
-                labelRefs.current[i] = el;
-              }}
-              className="type-micro absolute top-0 left-0 rounded-xs border border-line bg-paper/90 px-2.5 py-1.5 whitespace-nowrap text-ink shadow-[0_6px_20px_-12px_rgba(38,23,10,0.5)] backdrop-blur-sm"
-              style={{ opacity: 0, transition: "opacity .4s" }}
-            >
-              {current.annotations[i]?.label}
-            </div>
-          ))}
-        </div>
-
-        {/* Texto dos atos (empilhados; a linha do tempo revela um por vez) */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] md:inset-y-0 md:flex md:items-center md:px-10 md:pb-0">
-          <div className="relative min-h-[12.5rem] w-full max-w-md md:min-h-[19rem]">
+        {/* Texto dos atos: coluna própria à esquerda (desktop) ou faixa de baixo (celular). */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] md:inset-y-0 md:right-auto md:flex md:w-[40%] md:items-center md:px-10 md:pb-0">
+          <div ref={actsRef} className="relative w-full max-w-md md:min-h-[19rem]">
             {ACTS.map((a, i) => {
               const Heading = i === 0 ? "h1" : "h2";
               const active = i === act;
@@ -345,19 +379,19 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
                   key={a.id}
                   data-act
                   inert={!active}
-                  className={`absolute inset-x-0 bottom-0 rounded-sm bg-paper/80 p-4 backdrop-blur-[6px] transition-opacity duration-500 md:top-1/2 md:bottom-auto md:-ml-6 md:-translate-y-1/2 md:p-6 ${
+                  className={`absolute inset-x-0 bottom-0 transition-opacity duration-500 md:top-1/2 md:bottom-auto md:-translate-y-1/2 ${
                     active ? "pointer-events-auto opacity-100" : "opacity-0"
                   }`}
                 >
-                  <Heading id={i === 0 ? "hero-title" : undefined} data-split className="type-brand text-[clamp(1.7rem,3.6vw,3rem)] leading-[1.08]">
+                  <Heading id={i === 0 ? "hero-title" : undefined} data-split className="type-brand text-[clamp(1.6rem,3.4vw,3rem)] leading-[1.08]">
                     {i === 0 ? <span className="sr-only">Maverick Capshop — </span> : null}
                     {a.title}
                   </Heading>
-                  <p data-split className="mt-4 max-w-sm text-[0.95rem] leading-relaxed text-ink-soft md:text-base">
+                  <p data-split className="mt-3 max-w-sm text-[0.95rem] leading-relaxed text-ink-soft md:mt-4 md:text-base">
                     {a.text}
                   </p>
                   {a.annotations.length > 0 ? (
-                    <ul data-fade className="mt-4 flex flex-wrap gap-2 md:hidden">
+                    <ul data-fade className="mt-3 flex flex-wrap gap-2 md:hidden">
                       {a.annotations.map((n) => (
                         <li key={n.label} className="type-micro rounded-xs border border-line bg-paper/80 px-2 py-1 text-ink-soft">
                           {n.label}
@@ -366,7 +400,7 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
                     </ul>
                   ) : null}
                   {i === ACTS.length - 1 ? (
-                    <div data-fade className="mt-6 flex flex-wrap items-center gap-4">
+                    <div data-fade className="mt-5 flex flex-wrap items-center gap-4 md:mt-6">
                       <RollLink href="/loja">Explorar a coleção</RollLink>
                       {productHref ? (
                         <Link href={productHref} className="type-micro inline-flex min-h-12 items-center border-b border-ink/40 hover:border-ink">

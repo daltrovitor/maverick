@@ -1,28 +1,24 @@
 // Hello World
 /**
- * Cena WebGL do boné principal: dad hat Polo preto (seis gomos, pônei bordado na frente,
- * "POLO" bordado atrás, tira com fivela dourada).
+ * Cena WebGL do boné principal: o modelo "Baseball Cap" (Scott VanArsdale, CC BY 4.0) com a
+ * textura trocada pela do boné Polo preto (tecido medido nas fotos + bordados recortados das
+ * fotos; ver scripts/build-polo-model.py).
  *
- * O boné fica parado e a CÂMERA é dirigida (azimute, elevação, distância, ponto de foco),
- * como num estúdio. As luzes acompanham a câmera para o tecido preto nunca "sumir".
- * Geometria procedural calibrada pelas fotos; bordados traçados a partir das próprias fotos.
- * Renderiza só quando algo muda; respeita movimento reduzido; libera tudo em dispose().
+ * Duas camadas de movimento:
+ * - CÂMERA dirigida como num estúdio (azimute, elevação, distância, foco) com luzes que a
+ *   acompanham, para o tecido preto nunca "sumir";
+ * - POSE do próprio boné (inclinação, rolagem, giro, elevação), mais a entrada, a flutuação
+ *   e a leve inclinação na direção do cursor.
+ * Respeita movimento reduzido (sem flutuação nem entrada); libera tudo em dispose().
  */
 import {
-  BackSide,
   Box3,
-  BufferGeometry,
-  CircleGeometry,
   Color,
   DirectionalLight,
   DoubleSide,
   Group,
   HemisphereLight,
-  InstancedMesh,
-  LinearSRGBColorSpace,
-  Matrix4,
   Mesh,
-  MeshBasicMaterial,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   NeutralToneMapping,
@@ -33,42 +29,24 @@ import {
   Quaternion,
   Scene,
   ShadowMaterial,
-  SphereGeometry,
   SRGBColorSpace,
-  TextureLoader,
-  TorusGeometry,
   Vector2,
   Vector3,
   WebGLRenderer,
+  type BufferGeometry,
   type Material,
   type Texture,
 } from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import {
-  brimCenter,
-  brimStitchRows,
-  buildArchBindingTube,
-  buildBand,
-  buildBrimGeometry,
-  buildBuckleGeometry,
-  buildBucklePinGeometry,
-  buildCrownGeometry,
-  buildCrownPatch,
-  buildSeamTube,
-  CAP,
-  crownNormal,
-  crownOffsetPoint,
-  crownPoint,
-  SEAM_US,
-  seamPoints,
-} from "@/components/cap/capGeometry";
-import { stitchMatricesAlong } from "@/components/cap/capStitches";
-import { createFabricRoughness, createTwillNormal, createWashedFabricMap } from "@/components/cap/capTextures";
+import { MODEL_ANCHORS, type ModelAnchorId } from "@/components/cap/capModelAnchors";
 
-export type AnchorId = "pony" | "brim" | "eyelet" | "seam" | "polo" | "strap" | "buckle" | "button";
+export const CAP_MODEL_URL = "/models/polo/cap.glb";
+
+export type AnchorId = ModelAnchorId;
 export type FocusId = "center" | AnchorId;
 
-/** Estado da câmera e da luz (o que a narrativa controla). */
+/** Estado da câmera, da luz e da pose do boné (o que a narrativa controla). */
 export interface Rig {
   /** Azimute da câmera em rad (0 = frente; π = traseira). Pode passar de 2π (voltas). */
   az: number;
@@ -85,9 +63,14 @@ export interface Rig {
   fill: number;
   rim: number;
   exposure: number;
-  /** Deslocamento do produto no quadro (fração da largura/altura) para compor com o texto. */
+  /** Deslocamento do produto no quadro (fração da largura/altura). */
   frameX: number;
   frameY: number;
+  /** Pose do boné: inclinação para a frente, rolagem lateral, giro extra (rad) e elevação. */
+  tilt: number;
+  roll: number;
+  spin: number;
+  lift: number;
 }
 
 export interface ProjectedPoint {
@@ -105,27 +88,26 @@ export interface CapStageOptions {
   readonly onContextLost?: () => void;
 }
 
-/* Cores medidas nas fotos de referência. */
-const PALETTE = {
-  fabric: "#2f2f30",
-  brim: "#323233",
-  thread: "#3a3a3b",
-  eyelet: "#1e1e1f",
-  brass: "#b9a382",
-  lining: "#262524",
-  sweatband: "#1d1c1b",
-} as const;
+const ANCHOR_IDS = Object.keys(MODEL_ANCHORS) as AnchorId[];
 
-const ANCHOR_IDS: readonly AnchorId[] = ["pony", "brim", "eyelet", "seam", "polo", "strap", "buckle", "button"];
-
-/* Posições dos bordados no boné (u = volta em torno da copa; v = altura), calibradas pelas fotos. */
-const PONY = { u: 0.506, v0: 0.3, v1: 0.6, comp: 1.15 } as const;
-const POLO = { u: 0.912, v0: 0.47, v1: 0.565, comp: 1 } as const;
-const STRAP = { v0: 0.03, v1: 0.17 } as const;
-const BUCKLE = { u: 0.94, v: 0.1 } as const;
+/** Para onde cada ponto "olha" (teste de visibilidade das anotações); null = sempre visível. */
+const ANCHOR_NORMALS: Readonly<Record<AnchorId, readonly [number, number, number] | null>> = {
+  pony: [0, 0.2, 1],
+  polo: [0, 0.2, -1],
+  brim: [0, 1, 0.35],
+  eyelet: [0.85, 0.5, 0],
+  seam: [1, 0.1, 0],
+  strap: [0, -0.1, -1],
+  button: null,
+};
 
 const EL_LIMIT = { min: -0.25, max: 1.05 } as const;
-const ZOOM_LIMIT = { min: 0.75, max: 2.2 } as const;
+const ZOOM_LIMIT = { min: 0.75, max: 2 } as const;
+/** Entrada: espera a abertura da marca sair de cima e então desce girando. */
+const ENTRANCE_S = 2.2;
+const ENTRANCE_DELAY_S = 0.35;
+/** Multiplicador da cor do tecido (atlas já tingido com a mediana medida nas fotos). */
+const FABRIC_LEVEL = 0.6;
 
 export const DEFAULT_RIG: Rig = {
   az: 0,
@@ -140,42 +122,21 @@ export const DEFAULT_RIG: Rig = {
   exposure: 1,
   frameX: 0,
   frameY: 0,
+  tilt: 0,
+  roll: 0,
+  spin: 0,
+  lift: 0,
 };
 
 function damp(current: number, target: number, lambda: number, dt: number): number {
   return current + (target - current) * (1 - Math.exp(-lambda * dt));
 }
 
-/** Bounds (u0..u1, v0..v1) de um bordado sobre a copa mantendo a proporção da textura. */
-function patchBounds(aspect: number, uCenter: number, v0: number, v1: number, comp: number) {
-  let height = 0;
-  let prev = crownPoint(uCenter, v0);
-  for (let k = 1; k <= 48; k += 1) {
-    const p = crownPoint(uCenter, v0 + ((v1 - v0) * k) / 48);
-    height += p.distanceTo(prev);
-    prev = p;
-  }
-  const target = (height * aspect) / comp;
-  const vm = (v0 + v1) / 2;
-  const arc = (du: number) => {
-    let length = 0;
-    let last = crownPoint(uCenter - du, vm);
-    for (let k = 1; k <= 48; k += 1) {
-      const p = crownPoint(uCenter - du + (2 * du * k) / 48, vm);
-      length += p.distanceTo(last);
-      last = p;
-    }
-    return length;
-  };
-  let lo = 0.002;
-  let hi = 0.24;
-  for (let i = 0; i < 30; i += 1) {
-    const mid = (lo + hi) / 2;
-    if (arc(mid) < target) lo = mid;
-    else hi = mid;
-  }
-  const du = (lo + hi) / 2;
-  return { u0: uCenter - du, u1: uCenter + du, v0, v1 };
+/** Saída com leve passada do ponto (a aterrissagem do boné). */
+function easeOutBack(t: number): number {
+  const c1 = 1.25;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
 }
 
 export class CapStage {
@@ -183,15 +144,15 @@ export class CapStage {
   private readonly scene = new Scene();
   // Teleobjetiva leve, como fotografia de produto (sem exagerar a aba por perspectiva).
   private readonly camera = new PerspectiveCamera(20, 1, 0.05, 120);
-  private readonly capRoot = new Group();
+  /** Pivô no centro do boné: recebe a pose; o modelo dentro dele fica centralizado. */
+  private readonly pivot = new Group();
   private readonly lightRig = new Group();
   private readonly key = new DirectionalLight(0xffffff, 2.2);
   private readonly fill = new DirectionalLight(0xf3f1ee, 0.8);
   private readonly rim = new DirectionalLight(0xffffff, 1.6);
   private readonly hemi = new HemisphereLight(0xffffff, 0xe8e2d8, 0.55);
   private readonly anchors = {} as Record<AnchorId, Vector3>;
-  private readonly anchorNormals = {} as Record<AnchorId, Vector3 | null>;
-  private readonly disposables: Array<BufferGeometry | Material | Texture> = [];
+  private readonly disposables = new Set<BufferGeometry | Material | Texture>();
   private readonly options: CapStageOptions;
 
   private width = 1;
@@ -199,8 +160,9 @@ export class CapStage {
   private active = false;
   private dirty = true;
   private lastTime = 0;
-  private modelWidth = 2;
-  private modelHeight = 1.6;
+  /** Extensão horizontal (maior entre largura e profundidade) e altura do boné. */
+  private frameWidth = 2.8;
+  private frameHeight = 1.4;
   private groundY = -0.7;
 
   private readonly target: Rig = { ...DEFAULT_RIG };
@@ -214,6 +176,11 @@ export class CapStage {
   private pinchStart = 0;
   private zoomAtPinch = 1;
   private lastMoveTime = 0;
+
+  /** Entrada (0 → 1), flutuação contínua e inclinação na direção do cursor. */
+  private entrance = 1;
+  private clock = 0;
+  private readonly hover = { x: 0, y: 0, tx: 0, ty: 0 };
 
   constructor(options: CapStageOptions) {
     this.options = options;
@@ -232,16 +199,16 @@ export class CapStage {
     pmrem.dispose();
     this.scene.environment = environment;
     this.scene.environmentIntensity = 0.62;
-    this.disposables.push(environment);
+    this.disposables.add(environment);
 
     // Estúdio: principal suave do alto/esquerda, preenchimento à direita, recorte por trás.
     this.key.position.set(-2.4, 4.6, 4.2);
     this.key.castShadow = true;
     this.key.shadow.mapSize.set(high ? 2048 : 1024, high ? 2048 : 1024);
-    this.key.shadow.camera.left = -2.4;
-    this.key.shadow.camera.right = 2.4;
-    this.key.shadow.camera.top = 2.4;
-    this.key.shadow.camera.bottom = -2.4;
+    this.key.shadow.camera.left = -2.6;
+    this.key.shadow.camera.right = 2.6;
+    this.key.shadow.camera.top = 2.6;
+    this.key.shadow.camera.bottom = -2.6;
     this.key.shadow.camera.near = 0.5;
     this.key.shadow.camera.far = 14;
     this.key.shadow.radius = 6;
@@ -250,254 +217,101 @@ export class CapStage {
     this.fill.position.set(3.6, 1.2, 3.2);
     this.rim.position.set(0.4, 3.4, -5);
     this.lightRig.add(this.key, this.fill, this.rim, this.key.target);
-    this.scene.add(this.lightRig, this.hemi);
+    this.scene.add(this.lightRig, this.hemi, this.pivot);
 
     options.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.attachInput(options.canvas);
   }
 
-  private track<T extends BufferGeometry | Material | Texture>(item: T): T {
-    this.disposables.push(item);
-    return item;
-  }
-
-  /** Carrega as texturas dos bordados e monta o modelo. */
+  /** Baixa o modelo, troca os materiais por versões de tecido e monta a cena. */
   async load(): Promise<void> {
-    const loader = new TextureLoader();
-    const load = (file: string) => loader.loadAsync(`/models/polo/${file}`);
-    const [pony, ponyHeight, polo, poloHeight] = await Promise.all([
-      load("pony.png"),
-      load("pony-height.png"),
-      load("polo.png"),
-      load("polo-height.png"),
-    ] as const);
-    for (const t of [pony, polo]) {
-      t.colorSpace = SRGBColorSpace;
-      t.anisotropy = 8;
-    }
-    for (const t of [ponyHeight, poloHeight]) t.colorSpace = LinearSRGBColorSpace;
-    for (const t of [pony, ponyHeight, polo, poloHeight]) this.track(t);
-    const aspect = (t: Texture) => {
-      const img = t.image as { width: number; height: number };
-      return img.width / img.height;
-    };
-    this.build({ map: pony, height: ponyHeight, aspect: aspect(pony) }, { map: polo, height: poloHeight, aspect: aspect(polo) });
-    this.dirty = true;
-  }
+    const gltf = await new GLTFLoader().loadAsync(CAP_MODEL_URL);
+    const model = gltf.scene;
+    const anisotropy = this.options.quality === "high" ? 8 : 4;
 
-  private build(
-    pony: { map: Texture; height: Texture; aspect: number },
-    polo: { map: Texture; height: Texture; aspect: number },
-  ): void {
-    const high = this.options.quality === "high";
-    const twill = this.track(createTwillNormal(256));
-    twill.repeat.set(30, 11);
-    const rough = this.track(createFabricRoughness());
-    rough.repeat.set(6, 3);
-    const washed = this.track(createWashedFabricMap(PALETTE.fabric));
-    washed.repeat.set(3, 1.4);
+    model.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+      this.disposables.add(object.geometry as BufferGeometry);
+      const source = object.material as MeshStandardMaterial;
+      this.disposables.add(source);
+      if (source.name === "fabric") {
+        // Algodão lavado: sem brilho especular, com "sheen" (o brilho de fibra nas bordas).
+        if (source.map) {
+          source.map.anisotropy = anisotropy;
+          this.disposables.add(source.map);
+        }
+        if (source.normalMap) this.disposables.add(source.normalMap);
+        object.material = this.track(
+          new MeshPhysicalMaterial({
+            map: source.map,
+            // Calibrado contra as fotos: sob a luz de estúdio o preto lavado fica no mesmo tom.
+            color: new Color(FABRIC_LEVEL, FABRIC_LEVEL, FABRIC_LEVEL),
+            normalMap: source.normalMap,
+            normalScale: source.normalScale.clone(),
+            roughness: 0.95,
+            sheen: 0.32,
+            sheenColor: new Color("#4a4a4a"),
+            sheenRoughness: 0.6,
+            side: DoubleSide,
+          }),
+        );
+      } else if (source.name === "strap") {
+        object.material = this.track(
+          new MeshPhysicalMaterial({ color: source.color.clone(), roughness: 0.82, sheen: 0.5, sheenColor: new Color("#5a5a5a"), side: DoubleSide }),
+        );
+      }
+    });
 
-    const fabric = (color: string, normalScale = 0.55) =>
-      this.track(
-        new MeshPhysicalMaterial({
-          color: new Color(color),
-          map: washed,
-          roughness: 1,
-          roughnessMap: rough,
-          normalMap: twill,
-          normalScale: new Vector2(normalScale, normalScale),
-          sheen: 0.85,
-          sheenColor: new Color("#808080"),
-          sheenRoughness: 0.62,
-          side: DoubleSide,
-        }),
-      );
-    const crownMat = fabric(PALETTE.fabric);
-    const brimMat = fabric(PALETTE.brim, 0.5);
-    const threadMat = this.track(new MeshStandardMaterial({ color: PALETTE.thread, roughness: 0.62 }));
-    const eyeletMat = this.track(new MeshStandardMaterial({ color: PALETTE.eyelet, roughness: 0.6 }));
-    const holeMat = this.track(new MeshBasicMaterial({ color: 0x070707 }));
-    const brassMat = this.track(
-      new MeshPhysicalMaterial({ color: PALETTE.brass, metalness: 1, roughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.4 }),
-    );
-    const liningMat = this.track(new MeshPhysicalMaterial({ color: PALETTE.lining, roughness: 0.75, sheen: 0.3, side: BackSide }));
-    const sweatMat = this.track(new MeshPhysicalMaterial({ color: PALETTE.sweatband, roughness: 0.7, sheen: 0.4, side: DoubleSide }));
-    const embroideryMat = (map: Texture, height: Texture) =>
-      this.track(
-        new MeshPhysicalMaterial({
-          map,
-          alphaTest: 0.45,
-          roughness: 0.6,
-          sheen: 0.6,
-          sheenColor: new Color("#ffffff"),
-          sheenRoughness: 0.5,
-          bumpMap: height,
-          bumpScale: 1.6,
-          displacementMap: height,
-          displacementScale: 0.012,
-          displacementBias: -0.001,
-          polygonOffset: true,
-          polygonOffsetFactor: -2,
-        }),
-      );
-
-    const add = (group: Group, mesh: Mesh | InstancedMesh, shadow = true) => {
-      mesh.castShadow = shadow;
-      mesh.receiveShadow = true;
-      group.add(mesh);
-      return mesh;
-    };
-
-    // Copa: seis gomos com costuras em relevo, abertura traseira com debrum.
-    const crown = new Group();
-    add(crown, new Mesh(this.track(high ? buildCrownGeometry() : buildCrownGeometry(0, 128, 48)), crownMat));
-    for (const u of SEAM_US) add(crown, new Mesh(this.track(buildSeamTube(u)), crownMat));
-    add(crown, new Mesh(this.track(buildArchBindingTube()), crownMat));
-
-    // Ilhoses bordados (um por gomo) e botão forrado.
-    const eyeletGeometry = this.track(new TorusGeometry(0.027, 0.0085, 10, high ? 32 : 18));
-    const holeGeometry = this.track(new CircleGeometry(0.019, 20));
-    const zAxis = new Vector3(0, 0, 1);
-    const eyeletU = (k: number) => (0.5 + 1 / 12 + k / 6) % 1;
-    for (let k = 0; k < 6; k += 1) {
-      const u = eyeletU(k);
-      const v = 0.72;
-      const q = new Quaternion().setFromUnitVectors(zAxis, crownNormal(u, v));
-      const ring = new Mesh(eyeletGeometry, eyeletMat);
-      ring.position.copy(crownOffsetPoint(u, v, 0.004));
-      ring.quaternion.copy(q);
-      const hole = new Mesh(holeGeometry, holeMat);
-      hole.position.copy(crownOffsetPoint(u, v, 0.0012));
-      hole.quaternion.copy(q);
-      add(crown, ring, false);
-      crown.add(hole);
-    }
-    const apex = crownPoint(0, 1);
-    const button = new Mesh(this.track(new SphereGeometry(0.085, 32, 16)), crownMat);
-    button.position.set(apex.x, apex.y + 0.014, apex.z);
-    button.scale.set(1, 0.46, 1);
-    add(crown, button);
-
-    // Bordados: pônei (frente) e POLO (traseira), traçados das fotos.
-    const ponyBounds = patchBounds(pony.aspect, PONY.u, PONY.v0, PONY.v1, PONY.comp);
-    add(
-      crown,
-      new Mesh(
-        this.track(buildCrownPatch({ ...ponyBounds, segmentsU: high ? 80 : 40, segmentsV: high ? 140 : 70, offset: 0.006, cutArch: false, flipU: true })),
-        embroideryMat(pony.map, pony.height),
-      ),
-      false,
-    );
-    const poloBounds = patchBounds(polo.aspect, POLO.u, POLO.v0, POLO.v1, POLO.comp);
-    add(
-      crown,
-      new Mesh(
-        this.track(buildCrownPatch({ ...poloBounds, segmentsU: high ? 140 : 70, segmentsV: high ? 60 : 30, offset: 0.006, cutArch: false, flipU: true })),
-        embroideryMat(polo.map, polo.height),
-      ),
-      false,
-    );
-
-    // Aba, sub-aba.
-    const brim = new Group();
-    add(brim, new Mesh(this.track(buildBrimGeometry(high ? 140 : 90, high ? 28 : 18)), brimMat));
-
-    // Interior visível pela abertura: forro e faixa.
-    const inside = new Group();
-    inside.add(new Mesh(this.track(buildCrownGeometry(-0.014)), liningMat));
-    const archU = CAP.archHalfAngle / (Math.PI * 2);
-    inside.add(new Mesh(this.track(buildBand(archU, 1 - archU, 0, 0.15, -0.02, 140)), sweatMat));
-
-    // Tira de ajuste atravessando a abertura e fivela dourada (lado direito, vista de trás).
-    const back = new Group();
-    const strapSpan = archU * 1.42;
-    add(back, new Mesh(this.track(buildBand(1 - strapSpan, 1 + strapSpan, STRAP.v0, STRAP.v1, 0.012, 64)), crownMat));
-    // Ponta da tira passando pela fivela.
-    add(back, new Mesh(this.track(buildBand(BUCKLE.u - 0.03, BUCKLE.u + 0.012, STRAP.v0 + 0.006, STRAP.v1 - 0.006, 0.024, 16)), crownMat));
-    const buckleNormal = crownNormal(BUCKLE.u, BUCKLE.v);
-    const bucklePos = crownOffsetPoint(BUCKLE.u, BUCKLE.v, 0.03);
-    const up = crownPoint(BUCKLE.u, BUCKLE.v + 0.05).sub(crownPoint(BUCKLE.u, BUCKLE.v - 0.05)).normalize();
-    const buckleQ = new Quaternion().setFromRotationMatrix(
-      new Matrix4().makeBasis(new Vector3().crossVectors(up, buckleNormal).normalize(), up, buckleNormal),
-    );
-    const buckleFrame = new Mesh(this.track(buildBuckleGeometry(0.12, 0.2, 0.018)), brassMat);
-    const buckleBar = new Mesh(this.track(buildBucklePinGeometry(0.17)), brassMat);
-    for (const piece of [buckleFrame, buckleBar]) {
-      piece.position.copy(bucklePos);
-      piece.quaternion.copy(buckleQ);
-      add(back, piece);
-    }
-
-    // Pespontos reais: costuras dos gomos (duplos) e fileiras da aba.
-    const stitchGeometry = this.track(new SphereGeometry(0.5, 8, 4));
-    const stitchMatrices: Matrix4[] = [];
-    const center = new Vector3(0, 0.3, 0);
-    const crownNormalAt = (p: Vector3) => p.clone().sub(center).normalize();
-    const seamOpts = { pitch: 0.017, length: 0.011, width: 0.0042, lift: 0.004 };
-    for (const u of SEAM_US) {
-      stitchMatricesAlong(seamPoints(u, 0.0075, 0.003, 90), crownNormalAt, seamOpts, stitchMatrices);
-      stitchMatricesAlong(seamPoints(u, -0.0075, 0.003, 90), crownNormalAt, seamOpts, stitchMatrices);
-    }
-    const brimUp = () => new Vector3(0, 1, 0);
-    for (const row of brimStitchRows(8)) {
-      stitchMatricesAlong(row, brimUp, { pitch: 0.016, length: 0.0105, width: 0.0042, lift: 0.0006 }, stitchMatrices);
-    }
-    const stitches = new InstancedMesh(stitchGeometry, threadMat, stitchMatrices.length);
-    stitchMatrices.forEach((m, i) => stitches.setMatrixAt(i, m));
-    stitches.instanceMatrix.needsUpdate = true;
-    crown.add(stitches);
-
-    this.capRoot.add(crown, brim, inside, back);
-
-    // Âncoras (antes de centralizar; convertidas abaixo).
-    const tip = brimCenter();
-    const ponyMid = (PONY.v0 + PONY.v1) / 2;
-    const poloMid = (POLO.v0 + POLO.v1) / 2;
-    const sideU = 0.5 - 1 / 12 - 1 / 6; // gomo lateral voltado para +x
-    const raw: Record<AnchorId, { p: Vector3; n: Vector3 | null }> = {
-      pony: { p: crownOffsetPoint(PONY.u, ponyMid, 0.01), n: crownNormal(PONY.u, ponyMid) },
-      brim: { p: tip.clone().add(new Vector3(0.18, 0.01, -0.06)), n: new Vector3(0, 1, 0.35).normalize() },
-      eyelet: { p: crownOffsetPoint(sideU, 0.72, 0.01), n: crownNormal(sideU, 0.72) },
-      seam: { p: crownOffsetPoint(0.5 - 1 / 6, 0.42, 0.006), n: crownNormal(0.5 - 1 / 6, 0.42) },
-      polo: { p: crownOffsetPoint(POLO.u, poloMid, 0.01), n: crownNormal(POLO.u, poloMid) },
-      strap: { p: crownOffsetPoint(0.985, (STRAP.v0 + STRAP.v1) / 2, 0.02), n: crownNormal(0, 0.08) },
-      buckle: { p: bucklePos.clone().addScaledVector(buckleNormal, 0.012), n: buckleNormal.clone() },
-      button: { p: apex.clone().add(new Vector3(0, 0.05, 0)), n: null },
-    };
-
-    // Centraliza o boné e posiciona o chão de sombra sob a aba.
-    const box = new Box3().setFromObject(this.capRoot);
-    const c = box.getCenter(new Vector3());
+    // Centraliza no pivô: as rotações da pose giram em torno do meio do boné.
+    const box = new Box3().setFromObject(model);
+    const center = box.getCenter(new Vector3());
     const size = box.getSize(new Vector3());
-    this.modelWidth = size.x;
-    this.modelHeight = size.y;
-    this.capRoot.position.set(-c.x, -c.y, -c.z);
-    this.groundY = box.min.y - c.y - 0.002;
+    model.position.sub(center);
+    this.pivot.add(model);
+    this.frameWidth = Math.max(size.x, size.z);
+    this.frameHeight = size.y;
+    this.groundY = box.min.y - center.y - 0.002;
     for (const id of ANCHOR_IDS) {
-      this.anchors[id] = raw[id].p.clone().sub(c);
-      this.anchorNormals[id] = raw[id].n;
+      const [x, y, z] = MODEL_ANCHORS[id];
+      this.anchors[id] = new Vector3(x, y, z).sub(center);
     }
-    this.scene.add(this.capRoot);
 
-    const ground = new Mesh(this.track(new PlaneGeometry(12, 12)), this.track(new ShadowMaterial({ opacity: 0.16 })));
+    const ground = new Mesh(this.track(new PlaneGeometry(14, 14)), this.track(new ShadowMaterial({ opacity: 0.15 })));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = this.groundY;
     ground.receiveShadow = true;
     this.scene.add(ground);
+    this.dirty = true;
   }
 
-  /** Posição (espaço da cena) de uma âncora — usada pela narrativa como ponto de foco. */
+  private track<T extends BufferGeometry | Material | Texture>(item: T): T {
+    this.disposables.add(item);
+    return item;
+  }
+
+  /** Posição de repouso (espaço da cena) de uma âncora — usada como ponto de foco da câmera. */
   anchor(id: FocusId): Vector3 {
     return id === "center" ? new Vector3() : (this.anchors[id]?.clone() ?? new Vector3());
   }
 
-  /* ───────────── Entrada (arraste, pinça, teclado) ───────────── */
+  /** O boné desce girando e assenta (chamado quando a apresentação aparece). */
+  playEntrance(): void {
+    if (this.options.reducedMotion) return;
+    // Começa negativo: segura a pose inicial (no alto, girado) enquanto o canvas aparece.
+    this.entrance = -ENTRANCE_DELAY_S / ENTRANCE_S;
+    this.dirty = true;
+  }
+
+  /* ───────────── Entrada (arraste, pinça, teclado, cursor) ───────────── */
 
   private attachInput(canvas: HTMLCanvasElement): void {
     canvas.addEventListener("pointerdown", this.onPointerDown);
     canvas.addEventListener("pointermove", this.onPointerMove);
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.onPointerUp);
+    canvas.addEventListener("pointerleave", this.onPointerLeave);
     canvas.addEventListener("keydown", this.onKeyDown);
   }
 
@@ -519,7 +333,15 @@ export class CapStage {
 
   private readonly onPointerMove = (event: PointerEvent): void => {
     const previous = this.pointers.get(event.pointerId);
-    if (!previous) return;
+    if (!previous) {
+      // Só passando o cursor: o boné se inclina de leve na direção dele.
+      if (event.pointerType === "mouse" && !this.options.reducedMotion) {
+        const rect = (event.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+        this.hover.tx = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        this.hover.ty = ((event.clientY - rect.top) / rect.height) * 2 - 1;
+      }
+      return;
+    }
     const now = performance.now();
     const dx = event.clientX - previous.x;
     const dy = event.clientY - previous.y;
@@ -542,6 +364,11 @@ export class CapStage {
     this.pointers.delete(event.pointerId);
     if (this.pointers.size < 2) this.pinchStart = 0;
     if (this.options.reducedMotion) this.velocityAz = 0;
+  };
+
+  private readonly onPointerLeave = (): void => {
+    this.hover.tx = 0;
+    this.hover.ty = 0;
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
@@ -567,7 +394,7 @@ export class CapStage {
 
   /* ───────────── API pública ───────────── */
 
-  /** Define o alvo da câmera/luz. `immediate` pula a suavização (primeiro quadro, movimento reduzido). */
+  /** Define o alvo da câmera/luz/pose. `immediate` pula a suavização (primeiro quadro, movimento reduzido). */
   setRig(rig: Partial<Rig>, immediate = false): void {
     let changed = false;
     for (const key of Object.keys(rig) as Array<keyof Rig>) {
@@ -636,6 +463,7 @@ export class CapStage {
     canvas.removeEventListener("pointermove", this.onPointerMove);
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerUp);
+    canvas.removeEventListener("pointerleave", this.onPointerLeave);
     canvas.removeEventListener("keydown", this.onKeyDown);
     canvas.removeEventListener("webglcontextlost", this.onContextLost);
     for (const item of this.disposables) item.dispose();
@@ -645,13 +473,18 @@ export class CapStage {
 
   /* ───────────── Loop ───────────── */
 
-  /** Distância que enquadra o boné inteiro na área disponível. */
+  /** Distância que enquadra o boné inteiro (de qualquer lado) com folga na área do canvas. */
   private fitDistance(): number {
     const tanHalf = Math.tan((this.camera.fov * Math.PI) / 360);
     const landscape = this.width >= this.height;
-    const widthPx = Math.min(this.width * (landscape ? 0.5 : 0.84), (this.height * (landscape ? 0.62 : 0.5) * this.modelWidth) / this.modelHeight);
-    return (this.modelWidth * this.height) / (2 * tanHalf * widthPx);
+    const widthPx = Math.min(
+      this.width * (landscape ? 0.78 : 0.8),
+      (this.height * (landscape ? 0.74 : 0.7) * this.frameWidth) / this.frameHeight,
+    );
+    return (this.frameWidth * this.height) / (2 * tanHalf * widthPx);
   }
+
+  private readonly poseQuat = new Quaternion();
 
   private apply(): void {
     const c = this.current;
@@ -665,8 +498,25 @@ export class CapStage {
       target.z + Math.cos(az) * Math.cos(el) * distance,
     );
     this.camera.lookAt(target);
-    // Desloca o produto no quadro para compor com o texto (sem mover a câmera).
     this.camera.setViewOffset(this.width, this.height, -c.frameX * this.width * 0.5, c.frameY * this.height * 0.5, this.width, this.height);
+
+    // Pose: coreografia + entrada (desce girando) + flutuação + cursor.
+    const motion = this.options.reducedMotion ? 0 : 1;
+    const progress = Math.min(1, Math.max(0, this.entrance));
+    const drop = 1 - easeOutBack(progress); // descida com leve passada ao assentar
+    const turn = Math.pow(1 - progress, 3); // giro desacelerando até parar de frente
+    const t = this.clock;
+    const floatY = motion * (Math.sin(t * 1.15) * 0.022 + Math.sin(t * 0.53 + 1.3) * 0.01);
+    const floatRoll = motion * Math.sin(t * 0.71 + 0.4) * 0.018;
+    const floatTilt = motion * Math.sin(t * 0.93 + 2.1) * 0.014;
+    this.pivot.position.y = c.lift + floatY + drop * 0.9;
+    this.pivot.rotation.set(
+      c.tilt + floatTilt + this.hover.y * 0.07 - drop * 0.35,
+      c.spin + this.hover.x * 0.12 - turn * Math.PI * 1.1,
+      c.roll + floatRoll + turn * 0.18,
+      "YXZ",
+    );
+    this.pivot.scale.setScalar(0.86 + 0.14 * Math.min(1, 1 - drop));
 
     // Luzes seguem a câmera em torno do eixo vertical: o preto nunca fica sem forma.
     this.lightRig.rotation.y = az;
@@ -683,8 +533,16 @@ export class CapStage {
     const now = performance.now();
     const dt = Math.min(0.05, (now - this.lastTime) / 1000);
     this.lastTime = now;
-    let moving = false;
+    // Sem movimento reduzido, o boné respira (flutuação contínua) enquanto está na tela.
+    let moving = !this.options.reducedMotion;
+    this.clock += dt;
 
+    if (this.entrance < 1) {
+      this.entrance = Math.min(1, this.entrance + dt / ENTRANCE_S);
+      moving = true;
+    }
+    this.hover.x = damp(this.hover.x, this.hover.tx, 4, dt);
+    this.hover.y = damp(this.hover.y, this.hover.ty, 4, dt);
     if (Math.abs(this.velocityAz) > 0.01 && this.pointers.size === 0) {
       this.userAz += this.velocityAz * dt;
       this.velocityAz *= Math.exp(-4 * dt);
@@ -714,29 +572,35 @@ export class CapStage {
   };
 
   private readonly scratch = new Vector3();
+  private readonly normal = new Vector3();
   private readonly toCamera = new Vector3();
 
+  /** Projeta as âncoras já com a pose atual do boné (as etiquetas acompanham o movimento). */
   private emitAnchors(): void {
     const onFrame = this.options.onFrame;
     if (!onFrame) return;
+    this.pivot.updateMatrixWorld();
+    this.pivot.getWorldQuaternion(this.poseQuat);
     const out = {} as Record<AnchorId, ProjectedPoint>;
     for (const id of ANCHOR_IDS) {
-      const p = this.anchors[id];
-      if (!p) {
+      const rest = this.anchors[id];
+      if (!rest) {
         out[id] = { x: 0, y: 0, visible: false };
         continue;
       }
-      const n = this.anchorNormals[id];
+      this.scratch.copy(rest).applyMatrix4(this.pivot.matrixWorld);
+      const n = ANCHOR_NORMALS[id];
       let visible = true;
       if (n) {
-        this.toCamera.copy(this.camera.position).sub(p).normalize();
-        visible = n.dot(this.toCamera) > 0.2;
+        this.normal.set(n[0], n[1], n[2]).normalize().applyQuaternion(this.poseQuat);
+        this.toCamera.copy(this.camera.position).sub(this.scratch).normalize();
+        visible = this.normal.dot(this.toCamera) > 0.2;
       }
-      this.scratch.copy(p).project(this.camera);
+      this.scratch.project(this.camera);
       out[id] = {
         x: (this.scratch.x * 0.5 + 0.5) * this.width,
         y: (-this.scratch.y * 0.5 + 0.5) * this.height,
-        visible: visible && this.scratch.z < 1 && Math.abs(this.scratch.x) < 1 && Math.abs(this.scratch.y) < 1,
+        visible: visible && this.scratch.z < 1 && Math.abs(this.scratch.x) < 0.96 && Math.abs(this.scratch.y) < 0.96,
       };
     }
     onFrame(out);

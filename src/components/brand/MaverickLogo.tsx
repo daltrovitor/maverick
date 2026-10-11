@@ -1,14 +1,15 @@
 // Hello World
 import type { CSSProperties } from "react";
+import { LOGO_BOX, MONOGRAM_BOX } from "@/components/brand/maverickLogoGeometry";
 
 /**
  * Logo oficial da Maverick (vetorizado do arquivo fornecido pela marca).
  * Renderizado por máscara CSS: a cor segue `currentColor`, então funciona em fundo claro
- * (café) e escuro (creme) sem duplicar arquivos.
+ * (café) e escuro (creme) sem duplicar arquivos. Proporções vêm do vetorizador (mesmo viewBox).
  */
 const VARIANTS = {
-  monogram: { src: "/brand/maverick-monogram.svg", ratio: 940 / 675 },
-  full: { src: "/brand/maverick-logo.svg", ratio: 2334 / 1260 },
+  monogram: { src: "/brand/maverick-monogram.svg", ratio: MONOGRAM_BOX.w / MONOGRAM_BOX.h },
+  full: { src: "/brand/maverick-logo.svg", ratio: LOGO_BOX.w / LOGO_BOX.h },
 } as const;
 
 export interface MaverickLogoProps {
@@ -16,9 +17,11 @@ export interface MaverickLogoProps {
   readonly className?: string;
   /** Rótulo acessível; omita quando houver texto visível ao lado. */
   readonly title?: string;
+  /** Destino do monograma quando a abertura da marca termina (só o do cabeçalho). */
+  readonly brandMark?: boolean;
 }
 
-export function MaverickLogo({ variant = "monogram", className, title }: MaverickLogoProps) {
+export function MaverickLogo({ variant = "monogram", className, title, brandMark }: MaverickLogoProps) {
   const { src, ratio } = VARIANTS[variant];
   const style: CSSProperties = {
     aspectRatio: String(ratio),
@@ -39,6 +42,7 @@ export function MaverickLogo({ variant = "monogram", className, title }: Maveric
       role={title ? "img" : undefined}
       aria-label={title}
       aria-hidden={title ? undefined : true}
+      data-brand-mark={brandMark ? "" : undefined}
     />
   );
 }

@@ -52,7 +52,7 @@ export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }
     >
       <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:h-[72px] sm:px-8">
         <Link href="/" className="flex min-h-12 items-center gap-3" aria-label="Maverick — página inicial">
-          <MaverickLogo variant="monogram" className="h-7 sm:h-8" />
+          <MaverickLogo variant="monogram" className="h-7 sm:h-8" brandMark />
           <span className="type-brand hidden text-[0.95rem] sm:inline">Maverick</span>
         </Link>
 

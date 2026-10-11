@@ -1,5 +1,6 @@
 // Hello World
 import type { Metadata } from "next";
+import { BrandIntro } from "@/components/brand/BrandIntro";
 import { CinematicStory } from "@/components/landing/CinematicStory";
 import { AffiliateBand, Facts, Statement } from "@/components/landing/BrandSections";
 import { ProductLineup, type LineupItem } from "@/components/landing/ProductLineup";
@@ -39,6 +40,7 @@ export default async function HomePage() {
 
   return (
     <>
+      <BrandIntro />
       <CinematicStory productHref={productHref} />
       <ProductLineup items={lineup} instagramUrl={instagramUrl} />
       <Statement />

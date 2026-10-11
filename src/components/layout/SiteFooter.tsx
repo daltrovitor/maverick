@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { MaverickLogo } from "@/components/brand/MaverickLogo";
 import { ViraWebMark } from "@/components/brand/ViraWebMark";
+import { MODEL_CREDIT } from "@/components/cap/capModelAnchors";
 import { formatBrPhone } from "@/lib/br";
 import type { StoreSettingsRow } from "@/lib/database.types";
 
@@ -114,7 +115,21 @@ export function SiteFooter({ settings }: { readonly settings: StoreSettingsRow |
         </p>
 
         <div className="flex flex-col gap-4 border-t border-cream/15 pt-6 text-xs text-cream/70 sm:flex-row sm:items-center sm:justify-between">
-          <p>© {year} Maverick Capshop · Headwear &amp; Lifestyle</p>
+          <div className="grid gap-1">
+            <p>© {year} Maverick Capshop · Headwear &amp; Lifestyle</p>
+            {/* Atribuição exigida pela licença do modelo 3D usado na página inicial. */}
+            <p className="text-cream/55">
+              Modelo 3D do boné:{" "}
+              <a href={MODEL_CREDIT.url} target="_blank" rel="noopener noreferrer" className="py-3 underline underline-offset-2 hover:text-cream">
+                “{MODEL_CREDIT.title}”, de {MODEL_CREDIT.author}
+              </a>{" "}
+              (
+              <a href={MODEL_CREDIT.licenseUrl} target="_blank" rel="noopener noreferrer" className="py-3 underline underline-offset-2 hover:text-cream">
+                {MODEL_CREDIT.license}
+              </a>
+              ), com textura alterada.
+            </p>
+          </div>
           <a
             href="https://www.viraweb.dev.br/"
             target="_blank"

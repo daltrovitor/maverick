@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import polo34 from "@/assets/polo-front-34.png";
+import poloBack34 from "@/assets/polo-back-34.png";
 import poloBack from "@/assets/polo-back.png";
 import poloFront from "@/assets/polo-front.png";
 import poloLeft from "@/assets/polo-side-left.png";
@@ -18,15 +19,16 @@ const PHOTOS = [
   { src: polo34, alt: "Boné Polo preto, vista três quartos" },
   { src: poloRight, alt: "Boné Polo preto, lateral" },
   { src: poloLeft, alt: "Boné Polo preto, outra lateral" },
+  { src: poloBack34, alt: "Boné Polo preto, traseira em três quartos" },
   { src: poloBack, alt: "Boné Polo preto, traseira com bordado POLO e fivela" },
 ] as const;
 
 const VIEWS: { label: string; az: number; el: number; dist: number; focus: FocusId }[] = [
   { label: "Frente", az: 0, el: 0.21, dist: 1, focus: "center" },
-  { label: "Bordado", az: 0.1, el: 0.12, dist: 0.55, focus: "pony" },
-  { label: "Lateral", az: Math.PI / 2, el: 0.2, dist: 0.95, focus: "center" },
-  { label: "Traseira", az: Math.PI, el: 0.26, dist: 0.85, focus: "center" },
-  { label: "Fivela", az: 3.45, el: 0.12, dist: 0.5, focus: "buckle" },
+  { label: "Bordado", az: 0.1, el: 0.12, dist: 0.8, focus: "pony" },
+  { label: "Lateral", az: Math.PI / 2, el: 0.2, dist: 1, focus: "center" },
+  { label: "Traseira", az: Math.PI, el: 0.24, dist: 1.02, focus: "center" },
+  { label: "Tira", az: Math.PI + 0.4, el: 0.06, dist: 0.98, focus: "center" },
 ];
 
 /**

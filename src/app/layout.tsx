@@ -1,6 +1,7 @@
 // Hello World
 import type { Metadata, Viewport } from "next";
 import { Archivo, Cinzel, JetBrains_Mono } from "next/font/google";
+import { INTRO_GATE_SCRIPT } from "@/components/brand/introGate";
 import { Toaster } from "@/components/ui/Toaster";
 import { siteUrl } from "@/lib/env";
 import "./globals.css";
@@ -76,6 +77,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="pt-BR" className={`${archivo.variable} ${cinzel.variable} ${jetbrains.variable}`} suppressHydrationWarning>
+      <head>
+        {/* Decide a abertura da marca antes da primeira pintura (sem piscar o conteúdo). */}
+        <script dangerouslySetInnerHTML={{ __html: INTRO_GATE_SCRIPT }} />
+      </head>
       <body className="min-h-dvh bg-paper text-ink antialiased" suppressHydrationWarning>
         {children}
         <Toaster />

@@ -210,27 +210,31 @@ html.lenis body {
 /* ───────────────────────── Entrada da marca (página inicial) ─────────────────────────
    O logo se monta como na abertura da ViraWeb: estilhaços do monograma entram de fora,
    girando, e se encaixam; as letras do nome sobem por máscara; a assinatura se abre do
-   centro e os fios se estendem. Tudo em CSS, desde a primeira pintura. <html data-intro>
+   centro e os fios se estendem. Cada peça é uma camada HTML animada só com transform e
+   opacity: a GPU conduz tudo, mesmo com a página hidratando por trás. <html data-intro>
    é decidido no <head> (introGate.ts); a saída é do BrandIntroController.              */
 .brand-intro {
   display: none;
 }
 
 html:is([data-intro="playing"], [data-intro="leaving"]) .brand-intro {
-  --intro-delay: 0.1s;
+  --intro-delay: 0.2s;
   position: fixed;
   inset: 0;
   z-index: 70;
   display: grid;
   place-items: center;
+  /* A abertura toca inteira: o toque e a roda não rolam a página por trás dela. */
+  touch-action: none;
+  overscroll-behavior: none;
   /* Se o JavaScript nunca assumir, a camada se retira sozinha. */
-  animation: brand-intro-failsafe 0.5s ease 7s forwards;
+  animation: brand-intro-failsafe 0.5s ease 8s forwards;
 }
 
 /* O monograma do cabeçalho espera o da abertura pousar no lugar dele. */
 html:is([data-intro="playing"], [data-intro="leaving"]):has(.brand-intro) header [data-brand-mark] {
   opacity: 0;
-  animation: brand-intro-failsafe-mark 0.3s ease 7.3s forwards;
+  animation: brand-intro-failsafe-mark 0.3s ease 8.3s forwards;
 }
 
 .brand-intro__bg {
@@ -239,88 +243,103 @@ html:is([data-intro="playing"], [data-intro="leaving"]):has(.brand-intro) header
   background-color: var(--color-paper);
 }
 
+.brand-intro__defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
 .brand-intro__logo {
+  --logo-w: min(82vw, 34rem, 86svh);
   position: relative;
-  width: min(78vw, 34rem, 86svh);
+  width: var(--logo-w);
+  fill: var(--color-ink);
+}
+
+.intro-layer {
+  position: absolute;
+}
+
+.intro-layer > svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 .brand-intro__mark {
   position: absolute;
   transform-origin: 0 0;
   will-change: transform;
-  transition: transform 1s cubic-bezier(0.76, 0, 0.24, 1);
-}
-
-.brand-intro__mark svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  overflow: visible;
+  transition: transform 1.15s cubic-bezier(0.76, 0, 0.24, 1);
 }
 
 .brand-intro__type {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
   transition:
-    opacity 0.45s ease,
-    transform 0.7s var(--ease-out-quart);
+    opacity 0.5s ease,
+    transform 0.8s var(--ease-out-quart);
 }
 
-.intro-type {
-  fill: var(--color-ink);
+/* Estilhaços: chegam translúcidos (claros sobre o branco), girando, e assentam no café do logo.
+   --dx/--dy vêm em unidades do logo; --u converte para o tamanho real na tela. */
+.intro-shards {
+  position: absolute;
+  inset: 0;
+  animation: intro-hide 0.01s linear calc(var(--intro-delay) + var(--shards-end)) forwards;
 }
 
-/* Estilhaços: chegam claros, girando, e assentam no café do logo. */
 .intro-shard {
   opacity: 0;
-  fill: var(--tone);
-  transform-box: view-box;
-  transform-origin: var(--ox) var(--oy);
-  transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(0.6);
+  transform-origin: var(--origin);
+  transform: translate3d(calc(var(--dx) * var(--u)), calc(var(--dy) * var(--u)), 0) rotate(var(--rot)) scale(0.55);
   animation:
-    intro-shard var(--shard-dur) var(--ease-out-expo) calc(var(--intro-delay) + var(--delay)) forwards,
-    intro-tone var(--tone-dur) cubic-bezier(0.55, 0, 0.75, 0.2) calc(var(--intro-delay) + var(--delay)) forwards;
+    intro-settle var(--shard-dur) var(--ease-out-expo) calc(var(--intro-delay) + var(--at)) forwards,
+    intro-ink var(--ink-dur) ease-out calc(var(--intro-delay) + var(--at)) forwards;
 }
 
-.intro-shards {
-  animation: intro-out 0.01s linear calc(var(--intro-delay) + var(--shards-end)) forwards;
+/* Dois estilhaços cruzam a tela em dourado e esfriam para o café ao pousar. */
+.intro-glint {
+  animation: intro-hide 1.1s cubic-bezier(0.45, 0, 0.55, 1) calc(var(--intro-delay) + var(--at) + 0.5s) forwards;
 }
 
 .intro-solid {
   opacity: 0;
-  fill: var(--color-ink);
-  animation: intro-in 0.45s ease-out calc(var(--intro-delay) + var(--solid-at)) forwards;
+  animation: intro-in 0.5s ease-out calc(var(--intro-delay) + var(--solid-at)) forwards;
 }
 
-/* Nome: cada letra sobe de trás da linha de base. */
+/* Nome: cada letra sobe de trás da linha de base, uma depois da outra. */
+.intro-mask {
+  position: absolute;
+  overflow: hidden;
+}
+
 .intro-rise {
-  transform-box: fill-box;
-  transform: translateY(112%);
-  animation: intro-settle 1.15s var(--ease-out-expo) calc(var(--intro-delay) + 0.55s + var(--delay)) forwards;
+  transform: translate3d(0, 112%, 0);
+  animation: intro-settle 1.2s var(--ease-out-expo) calc(var(--intro-delay) + var(--at)) forwards;
 }
 
 .intro-reg {
   opacity: 0;
-  transform-box: fill-box;
-  transform-origin: center;
   transform: scale(0.4);
-  animation: intro-appear 0.9s var(--ease-out-expo) calc(var(--intro-delay) + 1s) forwards;
+  animation: intro-appear 0.8s var(--ease-out-expo) calc(var(--intro-delay) + var(--at)) forwards;
 }
 
 /* Assinatura: as letras saem do centro e ganham o espaçamento final. */
 .intro-track {
   opacity: 0;
-  transform: translateX(var(--tx));
-  animation: intro-appear 1.3s var(--ease-out-expo) calc(var(--intro-delay) + 0.8s) forwards;
+  transform: translate3d(calc(var(--tx) * var(--u)), 0, 0);
+  animation: intro-appear 1.3s var(--ease-out-expo) calc(var(--intro-delay) + var(--at)) forwards;
 }
 
 .intro-rule {
-  transform-box: fill-box;
+  background-color: var(--color-ink);
   transform: scaleX(0);
-  animation: intro-settle 1.1s var(--ease-out-expo) calc(var(--intro-delay) + 1s) forwards;
+  animation: intro-settle 1.1s var(--ease-out-expo) calc(var(--intro-delay) + var(--at)) forwards;
 }
 
 .intro-rule--left {
@@ -333,9 +352,8 @@ html:is([data-intro="playing"], [data-intro="leaving"]):has(.brand-intro) header
 
 .intro-founded {
   opacity: 0;
-  transform-box: fill-box;
-  transform: translateY(70%);
-  animation: intro-appear 0.9s var(--ease-out-expo) calc(var(--intro-delay) + 0.95s + var(--delay)) forwards;
+  transform: translate3d(0, 70%, 0);
+  animation: intro-appear 0.8s var(--ease-out-expo) calc(var(--intro-delay) + var(--at)) forwards;
 }
 
 /* Saída: o fundo se dissolve, o texto do logo sai e o monograma voa até o cabeçalho. */
@@ -346,7 +364,7 @@ html[data-intro="leaving"] .brand-intro {
 
 .brand-intro.is-leaving .brand-intro__bg {
   opacity: 0;
-  transition: opacity 0.8s cubic-bezier(0.65, 0, 0.35, 1) 0.18s;
+  transition: opacity 0.85s cubic-bezier(0.65, 0, 0.35, 1) 0.2s;
 }
 
 .brand-intro.is-leaving .brand-intro__type {
@@ -364,22 +382,21 @@ html[data-intro="leaving"] .brand-intro {
   transition: opacity 0.45s ease;
 }
 
-@keyframes intro-shard {
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes intro-tone {
-  to {
-    fill: var(--color-ink);
-  }
-}
-
 @keyframes intro-settle {
   to {
     transform: none;
+  }
+}
+
+@keyframes intro-ink {
+  0% {
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 1;
   }
 }
 
@@ -396,9 +413,10 @@ html[data-intro="leaving"] .brand-intro {
   }
 }
 
-@keyframes intro-out {
+@keyframes intro-hide {
   to {
     opacity: 0;
+    visibility: hidden;
   }
 }
 

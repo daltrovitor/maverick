@@ -1,6 +1,6 @@
 // Hello World
 import { describe, expect, it } from "vitest";
-import { INTRO_GATE_SCRIPT, INTRO_STORAGE_KEY } from "@/components/brand/introGate";
+import { INTRO_GATE_SCRIPT } from "@/components/brand/introGate";
 import { LOGO_BOX, MONOGRAM_BOX } from "@/components/brand/maverickLogoGeometry";
 import {
   FOUNDED,
@@ -17,63 +17,46 @@ interface GateEnv {
   path?: string;
   search?: string;
   reducedMotion?: boolean;
-  stored?: boolean;
-  storageThrows?: boolean;
+  matchMediaThrows?: boolean;
 }
 
-/** Executa o script do <head> com um navegador simulado e devolve o atributo e o armazenamento. */
-function runGate({ path = "/", search = "", reducedMotion = false, stored = false, storageThrows = false }: GateEnv) {
+/** Executa o script do <head> com um navegador simulado e devolve o atributo marcado. */
+function runGate({ path = "/", search = "", reducedMotion = false, matchMediaThrows = false }: GateEnv) {
   const attrs = new Map<string, string>();
-  const storage = new Map<string, string>(stored ? [[INTRO_STORAGE_KEY, "1"]] : []);
-  const sessionStorage = {
-    getItem: (k: string) => {
-      if (storageThrows) throw new Error("SecurityError");
-      return storage.get(k) ?? null;
-    },
-    setItem: (k: string, v: string) => {
-      if (storageThrows) throw new Error("SecurityError");
-      storage.set(k, v);
-    },
-  };
   const document = { documentElement: { setAttribute: (k: string, v: string) => attrs.set(k, v) } };
-  const matchMedia = (q: string) => ({ matches: reducedMotion && q.includes("reduce") });
-  new Function("location", "matchMedia", "sessionStorage", "document", INTRO_GATE_SCRIPT)(
-    { pathname: path, search },
-    matchMedia,
-    sessionStorage,
-    document,
-  );
-  return { intro: attrs.get("data-intro") ?? null, stored: storage.has(INTRO_STORAGE_KEY) };
+  const matchMedia = (q: string) => {
+    if (matchMediaThrows) throw new Error("unsupported");
+    return { matches: reducedMotion && q.includes("reduce") };
+  };
+  new Function("location", "matchMedia", "document", INTRO_GATE_SCRIPT)({ pathname: path, search }, matchMedia, document);
+  return attrs.get("data-intro") ?? null;
 }
 
 const word = (glyphs: readonly LogoGlyph[]) => glyphs.map((g) => g.name).join("");
 
 describe("abertura da marca — decisão no <head>", () => {
-  it("toca na primeira visita à página inicial e marca a aba", () => {
-    expect(runGate({})).toEqual({ intro: "playing", stored: true });
+  it("toca ao abrir a página inicial", () => {
+    expect(runGate({})).toBe("playing");
   });
 
-  it("não repete na mesma aba", () => {
-    expect(runGate({ stored: true }).intro).toBeNull();
-  });
-
-  it("?abertura força tocar de novo", () => {
-    expect(runGate({ stored: true, search: "?abertura" }).intro).toBe("playing");
-    expect(runGate({ stored: true, search: "?x=1&abertura" }).intro).toBe("playing");
-    expect(runGate({ stored: true, search: "?aberturas" }).intro).toBeNull();
+  it("toca de novo a cada carregamento (reload), sem memória de visita", () => {
+    expect(runGate({})).toBe("playing");
+    expect(runGate({})).toBe("playing");
+    expect(runGate({ search: "?utm_source=instagram" })).toBe("playing");
+    expect(INTRO_GATE_SCRIPT).not.toContain("Storage");
   });
 
   it("só existe na página inicial", () => {
-    expect(runGate({ path: "/loja" }).intro).toBeNull();
-    expect(runGate({ path: "/produto/bone" }).intro).toBeNull();
+    expect(runGate({ path: "/loja" })).toBeNull();
+    expect(runGate({ path: "/produto/bone" })).toBeNull();
   });
 
   it("respeita movimento reduzido", () => {
-    expect(runGate({ reducedMotion: true })).toEqual({ intro: null, stored: false });
+    expect(runGate({ reducedMotion: true })).toBeNull();
   });
 
-  it("sem acesso ao armazenamento, não toca (nunca trava a página)", () => {
-    expect(runGate({ storageThrows: true }).intro).toBeNull();
+  it("se o navegador falhar, não toca (nunca trava a página)", () => {
+    expect(runGate({ matchMediaThrows: true })).toBeNull();
   });
 });
 

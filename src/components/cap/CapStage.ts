@@ -10,15 +10,20 @@
  * - POSE do próprio boné (inclinação, rolagem, giro, elevação), mais a entrada, a flutuação
  *   e a leve inclinação na direção do cursor.
  * Respeita movimento reduzido (sem flutuação nem entrada); libera tudo em dispose().
+ *
+ * Qualidade "low" (celular): sem mapa de sombra (uma sombra de contato desenhada substitui a
+ * segunda passada do modelo inteiro) e texturas reduzidas a 1024² antes de subir para a GPU.
  */
 import {
   Box3,
+  CanvasTexture,
   Color,
   DirectionalLight,
   DoubleSide,
   Group,
   HemisphereLight,
   Mesh,
+  MeshBasicMaterial,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   NeutralToneMapping,
@@ -40,8 +45,9 @@ import {
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { MODEL_ANCHORS, type ModelAnchorId } from "@/components/cap/capModelAnchors";
+import { CAP_MODEL_URL } from "@/components/cap/capModelUrl";
 
-export const CAP_MODEL_URL = "/models/polo/cap.glb";
+export { CAP_MODEL_URL };
 
 export type AnchorId = ModelAnchorId;
 export type FocusId = "center" | AnchorId;
@@ -104,6 +110,8 @@ const ANCHOR_NORMALS: Readonly<Record<AnchorId, readonly [number, number, number
 const EL_LIMIT = { min: -0.25, max: 1.05 } as const;
 /** Maior extensão do boné na tela (coordenadas normalizadas, 1 = borda da área). */
 const FIT_LIMIT = 0.93;
+/** Textura no celular: 1024² sobra para a área do boné e sobe 4× mais rápido para a GPU. */
+const LOW_TEXTURE_SIZE = 1024;
 /** Quantos vértices do modelo entram na conta de enquadramento (amostra uniforme). */
 const FIT_SAMPLES = 480;
 /** Entrada: espera a abertura da marca sair de cima e então desce girando. */
@@ -156,17 +164,27 @@ export class CapStage {
   private readonly hemi = new HemisphereLight(0xffffff, 0xe8e2d8, 0.55);
   private readonly anchors = {} as Record<AnchorId, Vector3>;
   private readonly disposables = new Set<BufferGeometry | Material | Texture>();
+  private readonly textures = new Set<Texture>();
   private readonly options: CapStageOptions;
+  private readonly high: boolean;
 
   private width = 1;
   private height = 1;
   private active = false;
   private dirty = true;
+  /** Já desenhou um quadro (shaders prontos): redimensionar redesenha na hora, sem quadro vazio. */
+  private rendered = false;
   private lastTime = 0;
-  /** Extensão horizontal (maior entre largura e profundidade) e altura do boné. */
+  /** Extensão horizontal (maior entre largura e profundidade), largura da copa e altura do boné. */
   private frameWidth = 2.8;
+  private crownWidth = 2;
   private frameHeight = 1.4;
   private groundY = -0.7;
+  /** Raio do boné em torno do pivô (planos de corte da câmera). */
+  private radius = 2;
+  /** Sombra de contato desenhada (qualidade "low", no lugar do mapa de sombra). */
+  private blob: Mesh<PlaneGeometry, MeshBasicMaterial> | null = null;
+  private readonly focus = new Vector3();
 
   private readonly target: Rig = { ...DEFAULT_RIG };
   private readonly current: Rig = { ...DEFAULT_RIG };
@@ -190,17 +208,22 @@ export class CapStage {
   constructor(options: CapStageOptions) {
     this.options = options;
     const high = options.quality === "high";
-    this.renderer = new WebGLRenderer({ canvas: options.canvas, antialias: high, alpha: true, powerPreference: "high-performance" });
+    this.high = high;
+    // Antisserrilhado sempre: sem ele as bordas "cintilam" enquanto o boné gira (e em GPU de
+    // celular o MSAA sai quase de graça).
+    this.renderer = new WebGLRenderer({ canvas: options.canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, high ? 2 : 1.5));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = NeutralToneMapping;
     this.renderer.toneMappingExposure = 1;
     this.renderer.setClearColor(0x000000, 0);
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = high;
     this.renderer.shadowMap.type = PCFShadowMap;
 
     const pmrem = new PMREMGenerator(this.renderer);
-    const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    const room = new RoomEnvironment();
+    const environment = pmrem.fromScene(room, 0.04).texture;
+    room.dispose();
     pmrem.dispose();
     this.scene.environment = environment;
     this.scene.environmentIntensity = 0.62;
@@ -208,7 +231,7 @@ export class CapStage {
 
     // Estúdio: principal suave do alto/esquerda, preenchimento à direita, recorte por trás.
     this.key.position.set(-2.4, 4.6, 4.2);
-    this.key.castShadow = true;
+    this.key.castShadow = high;
     this.key.shadow.mapSize.set(high ? 2048 : 1024, high ? 2048 : 1024);
     this.key.shadow.camera.left = -2.6;
     this.key.shadow.camera.right = 2.6;
@@ -228,16 +251,20 @@ export class CapStage {
     this.attachInput(options.canvas);
   }
 
-  /** Baixa o modelo, troca os materiais por versões de tecido e monta a cena. */
-  async load(): Promise<void> {
-    const gltf = await new GLTFLoader().loadAsync(CAP_MODEL_URL);
+  /**
+   * Monta a cena a partir dos bytes do modelo (já baixados enquanto a abertura tocava) ou,
+   * sem eles, baixando agora; troca os materiais por versões de tecido.
+   */
+  async load(source?: ArrayBuffer): Promise<void> {
+    const loader = new GLTFLoader();
+    const gltf = source ? await loader.parseAsync(source, "") : await loader.loadAsync(CAP_MODEL_URL);
     const model = gltf.scene;
-    const anisotropy = this.options.quality === "high" ? 8 : 4;
+    const anisotropy = this.high ? 8 : 4;
 
     model.traverse((object) => {
       if (!(object instanceof Mesh)) return;
-      object.castShadow = true;
-      object.receiveShadow = true;
+      object.castShadow = this.high;
+      object.receiveShadow = this.high;
       this.disposables.add(object.geometry as BufferGeometry);
       const source = object.material as MeshStandardMaterial;
       this.disposables.add(source);
@@ -246,8 +273,12 @@ export class CapStage {
         if (source.map) {
           source.map.anisotropy = anisotropy;
           this.disposables.add(source.map);
+          this.textures.add(source.map);
         }
-        if (source.normalMap) this.disposables.add(source.normalMap);
+        if (source.normalMap) {
+          this.disposables.add(source.normalMap);
+          this.textures.add(source.normalMap);
+        }
         object.material = this.track(
           new MeshPhysicalMaterial({
             map: source.map,
@@ -277,19 +308,81 @@ export class CapStage {
     this.pivot.add(model);
     this.fitSamples = this.sampleVertices(model, center);
     this.frameWidth = Math.max(size.x, size.z);
+    this.crownWidth = size.x;
     this.frameHeight = size.y;
     this.groundY = box.min.y - center.y - 0.002;
+    this.radius = size.length() / 2;
     for (const id of ANCHOR_IDS) {
       const [x, y, z] = MODEL_ANCHORS[id];
       this.anchors[id] = new Vector3(x, y, z).sub(center);
     }
 
-    const ground = new Mesh(this.track(new PlaneGeometry(14, 14)), this.track(new ShadowMaterial({ opacity: 0.15 })));
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = this.groundY;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
+    if (this.high) {
+      const ground = new Mesh(this.track(new PlaneGeometry(14, 14)), this.track(new ShadowMaterial({ opacity: 0.15 })));
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = this.groundY;
+      ground.receiveShadow = true;
+      this.scene.add(ground);
+    } else {
+      this.blob = this.createContactShadow(size);
+      this.scene.add(this.blob);
+      await Promise.all([...this.textures].map((texture) => this.shrinkTexture(texture, LOW_TEXTURE_SIZE)));
+    }
     this.dirty = true;
+  }
+
+  /** Sombra de contato: elipse esfumada no chão, do tamanho da pegada do boné. */
+  private createContactShadow(size: Vector3): Mesh<PlaneGeometry, MeshBasicMaterial> {
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 128;
+    const context = canvas.getContext("2d");
+    if (context) {
+      const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
+      gradient.addColorStop(0, "rgba(0,0,0,0.26)");
+      gradient.addColorStop(0.45, "rgba(0,0,0,0.15)");
+      gradient.addColorStop(1, "rgba(0,0,0,0)");
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 128, 128);
+    }
+    const map = this.track(new CanvasTexture(canvas));
+    map.colorSpace = SRGBColorSpace;
+    const material = this.track(new MeshBasicMaterial({ map, transparent: true, depthWrite: false, toneMapped: false }));
+    const blob = new Mesh(this.track(new PlaneGeometry(1, 1)), material);
+    blob.scale.set(size.x * 1.2, size.z * 1.05, 1);
+    blob.position.y = this.groundY;
+    blob.renderOrder = -1;
+    return blob;
+  }
+
+  /** Reduz uma textura fora da thread principal (createImageBitmap) antes de ela ir para a GPU. */
+  private async shrinkTexture(texture: Texture, size: number): Promise<void> {
+    const image = texture.image as ImageBitmap | HTMLImageElement | null;
+    if (!image || typeof createImageBitmap !== "function" || image.width <= size) return;
+    try {
+      const smaller = await createImageBitmap(image, { resizeWidth: size, resizeHeight: size, resizeQuality: "high" });
+      if (image instanceof ImageBitmap) image.close();
+      texture.image = smaller;
+      texture.needsUpdate = true;
+    } catch {
+      // Sem redimensionamento no navegador: segue com a textura original.
+    }
+  }
+
+  /**
+   * Compila os shaders e sobe as texturas para a GPU antes do primeiro quadro visível, para o
+   * boné entrar sem engasgo. A página chama isto enquanto nada se move na tela.
+   */
+  async warmUp(): Promise<void> {
+    this.apply();
+    await this.renderer.compileAsync(this.scene, this.camera);
+    for (const texture of this.textures) this.renderer.initTexture(texture);
+    this.draw();
+  }
+
+  private draw(): void {
+    this.renderer.render(this.scene, this.camera);
+    this.rendered = true;
   }
 
   /** Amostra uniforme de vértices de todas as peças, no espaço do pivô. */
@@ -434,6 +527,11 @@ export class CapStage {
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
     this.dirty = true;
+    // Mudar o tamanho apaga o canvas: redesenha já, antes da pintura (sem um quadro em branco).
+    if (this.rendered) {
+      this.apply();
+      this.draw();
+    }
   }
 
   setActive(active: boolean): void {
@@ -453,7 +551,7 @@ export class CapStage {
     this.apply();
     this.fitScale = this.fitGoal;
     this.apply();
-    this.renderer.render(this.scene, this.camera);
+    this.draw();
   }
 
   dispose(): void {
@@ -473,15 +571,59 @@ export class CapStage {
 
   /* ───────────── Loop ───────────── */
 
-  /** Distância que enquadra o boné inteiro (de qualquer lado) com folga na área do canvas. */
+  private get portrait(): boolean {
+    return this.width < this.height;
+  }
+
+  /** Distância que enquadra o boné na área do canvas (a guarda cuida do que sobrar). */
   private fitDistance(): number {
     const tanHalf = Math.tan((this.camera.fov * Math.PI) / 360);
-    const landscape = this.width >= this.height;
-    const widthPx = Math.min(
-      this.width * (landscape ? 0.78 : 0.8),
-      (this.height * (landscape ? 0.74 : 0.7) * this.frameWidth) / this.frameHeight,
-    );
-    return (this.frameWidth * this.height) / (2 * tanHalf * widthPx);
+    if (!this.portrait) {
+      // Paisagem: o boné inteiro, de qualquer lado, com folga.
+      const widthPx = Math.min(this.width * 0.78, (this.height * 0.74 * this.frameWidth) / this.frameHeight);
+      return (this.frameWidth * this.height) / (2 * tanHalf * widthPx);
+    }
+    // Celular (retrato): a largura manda. Enquadra uma largura entre a da copa (vista de frente)
+    // e o comprimento com a aba (de lado) quase de borda a borda; quando a pose mostra mais do
+    // que isso, a guarda afasta só o necessário.
+    const nominal = this.crownWidth + (this.frameWidth - this.crownWidth) * 0.35;
+    const widthPx = Math.min(this.width * 0.9, (this.height * 0.8 * nominal) / this.frameHeight);
+    return (nominal * this.height) / (2 * tanHalf * widthPx);
+  }
+
+  /** No celular os planos abertos afastam só metade: o boné continua grande na tela estreita. */
+  private shotDistance(dist: number): number {
+    return this.portrait && dist > 1 ? 1 + (dist - 1) * 0.5 : dist;
+  }
+
+  /** Pose do pivô (rad; `lift` em unidades do modelo). */
+  private pose(lift: number, tilt: number, yaw: number, roll: number): void {
+    this.pivot.position.y = lift;
+    this.pivot.rotation.set(tilt, yaw, roll, "YXZ");
+    this.pivot.updateMatrixWorld();
+  }
+
+  /**
+   * Planos de corte justos em volta do boné: a profundidade fica precisa até em GPU de celular,
+   * sem "z-fighting" entre a copa e o forro (era o que fazia o boné piscar ao girar).
+   */
+  private fitDepthRange(distance: number, target: Vector3): void {
+    const reach = this.radius + target.length() + Math.abs(this.pivot.position.y);
+    const near = Math.max(0.05, distance - reach * 1.5);
+    const far = distance + reach * 2.5;
+    if (Math.abs(near - this.camera.near) < 1e-3 && Math.abs(far - this.camera.far) < 1e-3) return;
+    this.camera.near = near;
+    this.camera.far = far;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** A sombra de contato segue o giro do boné e esmaece quando ele sobe. */
+  private placeContactShadow(): void {
+    const blob = this.blob;
+    if (!blob) return;
+    const height = Math.max(0, this.pivot.position.y);
+    blob.rotation.set(-Math.PI / 2, 0, this.pivot.rotation.y);
+    blob.material.opacity = Math.max(0.15, 1 - height * 0.9);
   }
 
   private readonly poseQuat = new Quaternion();
@@ -514,7 +656,7 @@ export class CapStage {
     const c = this.current;
     const az = c.az + this.userAz;
     const el = Math.min(EL_LIMIT.max, Math.max(EL_LIMIT.min, c.el + this.userEl));
-    const target = new Vector3(c.tx, c.ty, c.tz);
+    const target = this.focus.set(c.tx, c.ty, c.tz);
     this.camera.setViewOffset(this.width, this.height, -c.frameX * this.width * 0.5, c.frameY * this.height * 0.5, this.width, this.height);
 
     // Pose: coreografia + entrada (desce girando) + flutuação + cursor.
@@ -526,25 +668,29 @@ export class CapStage {
     const floatY = motion * (Math.sin(t * 1.15) * 0.022 + Math.sin(t * 0.53 + 1.3) * 0.01);
     const floatRoll = motion * Math.sin(t * 0.71 + 0.4) * 0.018;
     const floatTilt = motion * Math.sin(t * 0.93 + 2.1) * 0.014;
-    this.pivot.position.y = c.lift + floatY + drop * 0.9;
-    this.pivot.rotation.set(
-      c.tilt + floatTilt + this.hover.y * 0.07 - drop * 0.35,
-      c.spin + this.hover.x * 0.12 - turn * Math.PI * 1.1,
-      c.roll + floatRoll + turn * 0.18,
-      "YXZ",
-    );
+    const yaw = c.spin - turn * Math.PI * 1.1;
     this.pivot.scale.setScalar(0.86 + 0.14 * Math.min(1, 1 - drop));
-    this.pivot.updateMatrixWorld();
 
-    // Câmera no enquadramento da tomada; se alguma parte do boné (com a pose atual) fosse sair
-    // da área, afasta o necessário. Na entrada o boné vem de cima: a guarda não persegue a queda.
-    const base = this.fitDistance() * c.dist;
-    this.placeCamera(az, el, base, target);
+    // Câmera no enquadramento da tomada; se alguma parte do boné fosse sair da área, afasta o
+    // necessário. A guarda mede a pose da tomada, sem a flutuação nem o cursor (o tamanho não
+    // "respira" junto com eles); na entrada o boné vem de cima e ela não persegue a queda.
+    const base = this.fitDistance() * this.shotDistance(c.dist);
     if (this.fitSamples.length > 0 && this.entrance >= 1) {
+      this.pose(c.lift, c.tilt, yaw, c.roll);
+      this.placeCamera(az, el, base, target);
       this.fitGoal = Math.max(1, this.projectedExtent() / FIT_LIMIT);
       if (this.fitScale < 1.0001 && this.fitGoal < 1.0001) this.fitScale = 1;
     }
-    if (this.fitScale !== 1) this.placeCamera(az, el, base * this.fitScale, target);
+    this.pose(
+      c.lift + floatY + drop * 0.9,
+      c.tilt + floatTilt + this.hover.y * 0.07 - drop * 0.35,
+      yaw + this.hover.x * 0.12,
+      c.roll + floatRoll + turn * 0.18,
+    );
+    const distance = base * this.fitScale;
+    this.placeCamera(az, el, distance, target);
+    this.fitDepthRange(distance, target);
+    this.placeContactShadow();
 
     // Luzes seguem a câmera em torno do eixo vertical: o preto nunca fica sem forma.
     this.lightRig.rotation.y = az;
@@ -572,7 +718,7 @@ export class CapStage {
     this.hover.x = damp(this.hover.x, this.hover.tx, 4, dt);
     this.hover.y = damp(this.hover.y, this.hover.ty, 4, dt);
     if (Math.abs(this.fitScale - this.fitGoal) > 1e-4) {
-      this.fitScale = damp(this.fitScale, this.fitGoal, this.fitGoal > this.fitScale ? 18 : 3, dt);
+      this.fitScale = damp(this.fitScale, this.fitGoal, this.fitGoal > this.fitScale ? 16 : 4, dt);
       moving = true;
     }
     if (Math.abs(this.velocityAz) > 0.01 && this.pointers.size === 0) {
@@ -599,7 +745,7 @@ export class CapStage {
     if (!moving && !this.dirty) return;
     this.dirty = false;
     this.apply();
-    this.renderer.render(this.scene, this.camera);
+    this.draw();
     this.emitAnchors();
   };
 

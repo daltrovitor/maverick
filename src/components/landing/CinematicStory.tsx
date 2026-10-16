@@ -9,7 +9,8 @@ import { SplitText } from "gsap/SplitText";
 import { useGSAP } from "@gsap/react";
 import { useLenis } from "lenis/react";
 import type { AnchorId, CapStage, ProjectedPoint, Rig } from "@/components/cap/CapStage";
-import { INTRO_EXIT_EVENT } from "@/components/brand/introGate";
+import { CAP_MODEL_URL } from "@/components/cap/capModelUrl";
+import { INTRO_EXIT_EVENT, setIntroHold } from "@/components/brand/introGate";
 import { ACTS, actAt, rigAt } from "@/components/landing/cinematicActs";
 import { StaticPresentation } from "@/components/landing/StaticPresentation";
 import { MaverickLogo } from "@/components/brand/MaverickLogo";
@@ -29,6 +30,16 @@ const CALIBRATION_VIEWS: Record<string, Partial<Rig>> = {
   traseira: { az: Math.PI, el: 0.26, dist: 1, frameX: 0, frameY: 0 },
 };
 const LABEL_OFFSET = 140;
+/** As etiquetas ancoradas só existem a partir do md (no celular viram uma lista sob o texto). */
+const LABELS_QUERY = "(min-width: 768px)";
+/** Se a abertura nunca liberar a cena (falha no JavaScript dela), o boné entra mesmo assim. */
+const INTRO_FALLBACK_MS = 9000;
+
+async function fetchModel(): Promise<ArrayBuffer> {
+  const response = await fetch(CAP_MODEL_URL);
+  if (!response.ok) throw new Error(`HTTP ${response.status} ao baixar ${CAP_MODEL_URL}`);
+  return response.arrayBuffer();
+}
 
 /**
  * Apresentação cinematográfica do boné principal, conduzida pela rolagem.
@@ -49,7 +60,10 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
   const actRef = useRef(0);
   const scrollProgress = useRef(0);
   const boxSize = useRef({ w: 1, h: 1 });
+  const labelWidths = useRef<number[]>([]);
   const calibrationRef = useRef<Partial<Rig> | null>(null);
+  const showLabels = useMediaQuery(LABELS_QUERY);
+  const labelsOn = useRef(false);
 
   // Movimento reduzido, sem WebGL ou contexto perdido: apresentação estática.
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
@@ -71,11 +85,13 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
   }, []);
 
   // Etiquetas e linhas-guia atualizadas direto no DOM a cada quadro renderizado, sempre dentro
-  // da área do boné (nunca sobre o texto dos atos).
+  // da área do boné (nunca sobre o texto dos atos). Só escreve: as larguras são medidas quando o
+  // ato muda, nunca no meio do quadro (sem forçar o layout da página a cada frame).
   const onFrame = useCallback((anchors: Readonly<Record<AnchorId, ProjectedPoint>>) => {
+    if (!labelsOn.current) return;
     const list = ACTS[actRef.current]?.annotations ?? [];
     const { w, h } = boxSize.current;
-    const widths = labelRefs.current.map((el) => el?.offsetWidth ?? 0);
+    const widths = labelWidths.current;
     for (let i = 0; i < MAX_LABELS; i += 1) {
       const label = labelRefs.current[i];
       const line = lineRefs.current[i];
@@ -119,15 +135,62 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
     let disposed = false;
     let observer: IntersectionObserver | null = null;
     let resizer: ResizeObserver | null = null;
-    let stopIntroWait = () => {};
+    const cleanups: Array<() => void> = [];
+
+    // Duas etapas: rede e CPU já (bytes do modelo e módulo do three.js, em paralelo com a
+    // abertura); GPU (contexto, shaders, texturas) só quando o logo da abertura está montado e
+    // parado, ou já saindo — assim nada engasga a animação de entrada.
+    const introPlaying = document.documentElement.dataset.intro === "playing";
+    let openGpu = () => {};
+    const gpuGate = new Promise<void>((resolve) => (openGpu = resolve));
+    let markReady = () => {};
+    const stageReady = new Promise<void>((resolve) => (markReady = resolve));
+    let exited = !introPlaying;
+    let revealed = false;
+    let loaded: CapStage | null = null;
+
+    // O boné entra (desce girando) junto com a página: depois da abertura da marca, se houver.
+    const reveal = () => {
+      if (revealed || disposed || !loaded || !exited) return;
+      revealed = true;
+      setReady(true);
+      loaded.playEntrance();
+    };
+
+    if (introPlaying) {
+      const onExit = () => {
+        if (exited) return;
+        exited = true;
+        openGpu();
+        reveal();
+      };
+      setIntroHold(() => {
+        openGpu();
+        return stageReady;
+      });
+      window.addEventListener(INTRO_EXIT_EVENT, onExit, { once: true });
+      const fallback = window.setTimeout(onExit, INTRO_FALLBACK_MS);
+      cleanups.push(() => {
+        setIntroHold(null);
+        window.removeEventListener(INTRO_EXIT_EVENT, onExit);
+        window.clearTimeout(fallback);
+      });
+    } else {
+      openGpu();
+    }
+
+    const fail = (err?: unknown) => {
+      if (err) console.error("[3D] falha ao preparar o boné", err);
+      markReady();
+      if (!disposed) setWebglFailed(true);
+    };
 
     const start = async () => {
-      const mod = await import("@/components/cap/CapStage");
+      const [mod, bytes] = await Promise.all([import("@/components/cap/CapStage"), fetchModel()]);
+      if (disposed) return;
+      if (!mod.supportsWebGL()) return fail();
+      await gpuGate;
       if (disposed || !canvasRef.current || !stageBoxRef.current) return;
-      if (!mod.supportsWebGL()) {
-        setWebglFailed(true);
-        return;
-      }
       const coarse = window.matchMedia("(pointer: coarse)").matches;
       const stage = new mod.CapStage({
         canvas: canvasRef.current,
@@ -137,22 +200,23 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         onContextLost: () => setWebglFailed(true),
       });
       try {
-        await stage.load();
+        await stage.load(bytes);
+        const box = stageBoxRef.current;
+        boxSize.current = { w: box.clientWidth, h: box.clientHeight };
+        stage.resize(box.clientWidth, box.clientHeight);
+        applyRig(scrollProgress.current, true);
+        await stage.warmUp();
       } catch (err) {
-        console.error("[3D] falha ao carregar o modelo", err);
         stage.dispose();
-        setWebglFailed(true);
-        return;
+        return fail(err);
       }
       if (disposed) {
         stage.dispose();
         return;
       }
       stageRef.current = stage;
+      loaded = stage;
       const box = stageBoxRef.current;
-      boxSize.current = { w: box.clientWidth, h: box.clientHeight };
-      stage.resize(box.clientWidth, box.clientHeight);
-      applyRig(scrollProgress.current, true);
       resizer = new ResizeObserver(([entry]) => {
         if (!entry) return;
         boxSize.current = { w: entry.contentRect.width, h: entry.contentRect.height };
@@ -163,30 +227,33 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
         rootMargin: "200px",
       });
       if (sectionRef.current) observer.observe(sectionRef.current);
-      // O boné entra (desce girando) junto com a página: depois da abertura da marca, se houver.
-      const reveal = () => {
-        setReady(true);
-        stage.playEntrance();
-      };
-      if (document.documentElement.dataset.intro === "playing") {
-        window.addEventListener(INTRO_EXIT_EVENT, reveal, { once: true });
-        stopIntroWait = () => window.removeEventListener(INTRO_EXIT_EVENT, reveal);
-      } else {
-        reveal();
-      }
+      markReady();
+      reveal();
     };
 
-    const idle = window.setTimeout(() => void start(), 60);
+    const idle = window.setTimeout(() => void start().catch(fail), 60);
     return () => {
       disposed = true;
       window.clearTimeout(idle);
-      stopIntroWait();
+      markReady();
+      cleanups.forEach((cleanup) => cleanup());
       observer?.disconnect();
       resizer?.disconnect();
       stageRef.current?.dispose();
       stageRef.current = null;
     };
   }, [applyRig, onFrame, cinematic]);
+
+  // Larguras das etiquetas: medidas quando o texto delas muda (troca de ato) e após as fontes.
+  useEffect(() => {
+    labelsOn.current = showLabels;
+    if (!showLabels) return;
+    const measure = () => {
+      labelWidths.current = labelRefs.current.map((el) => el?.offsetWidth ?? 0);
+    };
+    measure();
+    void document.fonts?.ready.then(measure);
+  }, [act, showLabels]);
 
   // Celular: mede o texto mais alto dos atos; a área do boné termina acima dele.
   useEffect(() => {
@@ -290,7 +357,7 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
   const last = act === ACTS.length - 1;
 
   return (
-    <section ref={sectionRef} aria-labelledby="hero-title" className="relative h-[1000dvh] bg-paper md:h-[1300dvh]">
+    <section ref={sectionRef} aria-labelledby="hero-title" className="relative h-[1000svh] bg-paper md:h-[1300svh]">
       <a
         href="#colecao"
         className="sr-only-focusable absolute top-4 right-4 z-30 rounded-sm bg-ink px-4 py-3 text-sm text-paper"
@@ -300,7 +367,7 @@ export function CinematicStory({ productHref }: { readonly productHref: string |
 
       <div
         ref={stickyRef}
-        className="sticky top-16 h-[calc(100dvh-4rem)] overflow-hidden sm:top-[72px] sm:h-[calc(100dvh-72px)]"
+        className="sticky top-16 h-[calc(100svh-4rem)] overflow-hidden sm:top-[72px] sm:h-[calc(100svh-72px)]"
         style={{ "--acts-h": "15rem" } as CSSProperties}
       >
         {/* Plano médio: o boné tem área própria — nunca passa por baixo nem por cima do texto. */}

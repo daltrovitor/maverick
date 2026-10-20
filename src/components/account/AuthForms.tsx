@@ -83,6 +83,7 @@ export function AuthPanel({ next, notice }: { readonly next: string; readonly no
         ) : null}
         {tab === "criar" ? (
           <form id="panel-criar" role="tabpanel" aria-labelledby="tab-criar" action={signupAction} className="grid gap-5">
+            <input type="hidden" name="proximo" value={next} />
             <TextField label="Nome completo" name="fullName" autoComplete="name" required />
             <TextField label="E-mail" name="email" type="email" autoComplete="email" required />
             <TextField

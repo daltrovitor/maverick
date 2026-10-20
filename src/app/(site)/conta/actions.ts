@@ -8,7 +8,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { siteUrl } from "@/lib/env";
 import { errorMessage } from "@/lib/errors";
 import { allowRequest } from "@/lib/rate-limit";
-import { getSessionDb, NotConfiguredError } from "@/lib/supabase/server";
+import { getServiceDb, getSessionDb, NotConfiguredError } from "@/lib/supabase/server";
 import { emailSchema, firstIssue, phoneSchema } from "@/lib/validation";
 
 // Arquivos "use server" só exportam funções assíncronas; o estado inicial vive no cliente.
@@ -44,13 +44,17 @@ export async function signIn(_: FormResult, form: FormData): Promise<FormResult>
   if (blocked) return blocked;
 
   const db = await getSessionDb();
-  const { error } = await db.auth.signInWithPassword(parsed.data);
-  if (error) {
-    return {
-      ok: false,
-      message: error.code === "email_not_confirmed" ? "Confirme seu e-mail antes de entrar." : "E-mail ou senha incorretos.",
-    };
+  let { error } = await db.auth.signInWithPassword(parsed.data);
+  if (error?.code === "email_not_confirmed") {
+    // Contas criadas quando o site ainda exigia o link de confirmação. O Supabase só responde
+    // "email_not_confirmed" depois de conferir a senha, então a conta é confirmada aqui.
+    const service = getServiceDb();
+    const { data: profile } = await service.from("profiles").select("id").eq("email", parsed.data.email).maybeSingle();
+    if (profile && !(await service.auth.admin.updateUserById(profile.id, { email_confirm: true })).error) {
+      ({ error } = await db.auth.signInWithPassword(parsed.data));
+    }
   }
+  if (error) return { ok: false, message: "E-mail ou senha incorretos." };
   redirect(safeNext(form.get("proximo")));
 }
 
@@ -66,20 +70,27 @@ export async function signUp(_: FormResult, form: FormData): Promise<FormResult>
   const blocked = await guard("signup", 5);
   if (blocked) return blocked;
 
-  const db = await getSessionDb();
-  const { error } = await db.auth.signUp({
+  // Sem link de confirmação por e-mail: a conta nasce confirmada (API administrativa,
+  // só no servidor e com rate limit) e a sessão já é aberta em seguida.
+  const { error } = await getServiceDb().auth.admin.createUser({
     email: parsed.data.email,
     password: parsed.data.password,
-    options: {
-      data: { full_name: parsed.data.fullName },
-      emailRedirectTo: `${siteUrl}/auth/confirmar?proximo=/conta`,
-    },
+    email_confirm: true,
+    user_metadata: { full_name: parsed.data.fullName },
   });
   if (error) {
-    return { ok: false, message: error.code === "weak_password" ? "Escolha uma senha mais forte." : "Não foi possível criar a conta agora." };
+    if (error.code === "email_exists" || /already (been )?registered/i.test(error.message)) {
+      return { ok: false, message: "Já existe uma conta com este e-mail. Entre ou use “Esqueci a senha”." };
+    }
+    if (error.code === "weak_password") return { ok: false, message: "Escolha uma senha mais forte." };
+    console.error("[conta] signUp", error.code, error.message);
+    return { ok: false, message: "Não foi possível criar a conta agora." };
   }
-  // Mesma resposta para e-mail novo ou já cadastrado (não revela quem tem conta).
-  return { ok: true, message: "Enviamos um link de confirmação para o seu e-mail." };
+
+  const db = await getSessionDb();
+  const { error: loginError } = await db.auth.signInWithPassword({ email: parsed.data.email, password: parsed.data.password });
+  if (loginError) return { ok: true, message: "Conta criada. Entre com seu e-mail e senha." };
+  redirect(safeNext(form.get("proximo")));
 }
 
 export async function requestPasswordReset(_: FormResult, form: FormData): Promise<FormResult> {

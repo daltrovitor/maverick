@@ -9,6 +9,11 @@ const orderViewSchema = z.object({
   status: z.enum(["awaiting_payment", "paid", "preparing", "shipped", "delivered", "canceled", "expired"]),
   payment_method: z.enum(["pix", "card"]),
   payment_status: z.string(),
+  // nullish: tolera o banco ainda sem a migration 07 durante o deploy.
+  pix_provider: z.enum(["stripe", "manual"]).nullish(),
+  pix_qr_data: z.string().nullish(),
+  pix_qr_expires_at: z.string().nullish(),
+  delivery_tracking_url: z.string().nullish(),
   customer_name: z.string(),
   customer_email: z.string(),
   shipping_address: z.object({

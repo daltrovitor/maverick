@@ -92,6 +92,9 @@ export async function saveSettings(input: unknown): Promise<AdminResult> {
     if (pixParts > 0 && pixParts < 4) {
       return { ok: false, message: "Para ativar o Pix, preencha chave, tipo, nome do favorecido e cidade." };
     }
+    if (s.customMaxQuantity < s.customMinQuantity) {
+      return { ok: false, message: "Personalizado: a quantidade máxima precisa ser maior que a mínima." };
+    }
     const { error } = await db
       .from("store_settings")
       .update({
@@ -104,7 +107,17 @@ export async function saveSettings(input: unknown): Promise<AdminResult> {
         pix_holder_name: s.pixHolderName,
         pix_city: s.pixCity,
         pix_expiration_hours: s.pixExpirationHours,
+        pix_provider: s.pixProvider,
         card_enabled: s.cardEnabled,
+        custom_enabled: s.customEnabled,
+        custom_unit_price_cents: s.customUnitPriceCents,
+        custom_min_quantity: s.customMinQuantity,
+        custom_max_quantity: s.customMaxQuantity,
+        custom_step_units: s.customStepUnits,
+        custom_step_bps: s.customStepBps,
+        custom_max_discount_bps: s.customMaxDiscountBps,
+        dimona_auto_forward: s.dimonaAutoForward,
+        dimona_shipping_speed: s.dimonaShippingSpeed,
         announcement: s.announcement,
         shipping_policy: s.shippingPolicy,
         exchange_policy: s.exchangePolicy,

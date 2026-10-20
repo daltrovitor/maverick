@@ -1,6 +1,6 @@
 // Hello World
 import { centsToInput } from "@/lib/br";
-import type { ProductSpec, ProductStatus } from "@/lib/database.types";
+import type { DimonaFiles, Fulfillment, ProductSpec, ProductStatus } from "@/lib/database.types";
 
 /** Modelo do editor de produtos (módulo neutro: usado pelo servidor e pelo cliente). */
 export interface EditorImage {
@@ -21,6 +21,19 @@ export interface EditorVariant {
   compareAt: string;
   stock: string;
   isActive: boolean;
+  dimonaSkuId: string;
+}
+
+/** Links das artes/mockups por lado (texto livre no editor; validado no servidor). */
+export type EditorDimonaFiles = { front: string; back: string; left_sleeve: string; right_sleeve: string };
+
+export function filesToEditor(files: DimonaFiles | null | undefined): EditorDimonaFiles {
+  return {
+    front: files?.front ?? "",
+    back: files?.back ?? "",
+    left_sleeve: files?.left_sleeve ?? "",
+    right_sleeve: files?.right_sleeve ?? "",
+  };
 }
 
 export interface EditorProduct {
@@ -31,6 +44,9 @@ export interface EditorProduct {
   description: string;
   categoryId: string;
   status: ProductStatus;
+  fulfillment: Fulfillment;
+  dimonaDesigns: EditorDimonaFiles;
+  dimonaMocks: EditorDimonaFiles;
   isFeatured: boolean;
   position: string;
   seoTitle: string;
@@ -49,6 +65,7 @@ export function variantToEditor(v: {
   compare_at_cents: number | null;
   stock: number;
   is_active: boolean;
+  dimona_sku_id?: string | null;
 }): EditorVariant {
   return {
     key: v.id,
@@ -60,5 +77,6 @@ export function variantToEditor(v: {
     compareAt: v.compare_at_cents ? centsToInput(v.compare_at_cents) : "",
     stock: String(v.stock),
     isActive: v.is_active,
+    dimonaSkuId: v.dimona_sku_id ?? "",
   };
 }

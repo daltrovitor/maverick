@@ -10,6 +10,7 @@ import { useCart } from "@/components/cart/CartProvider";
 
 const NAV = [
   { href: "/loja", label: "Coleção" },
+  { href: "/#personalizado", label: "Personalizado" },
   { href: "/afiliados", label: "Afiliados" },
   { href: "/conta", label: "Conta" },
 ] as const;

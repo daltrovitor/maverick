@@ -2,15 +2,17 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import { notFound } from "next/navigation";
-import { CopyButton, Deadline, OrderAutoRefresh, PayWithCardButton } from "@/components/checkout/OrderLive";
+import { CopyButton, Deadline, OrderAutoRefresh } from "@/components/checkout/OrderLive";
+import { StripeCardPayment } from "@/components/checkout/StripeCardPayment";
 import { Badge } from "@/components/ui/Badge";
 import { ButtonLink } from "@/components/ui/Button";
 import { formatBRL, formatBrPhone, formatCep } from "@/lib/br";
 import { getStoreSettings } from "@/lib/catalog";
 import { ORDER_STATUS, PAYMENT_METHOD } from "@/lib/order-status";
 import { getOrderByToken } from "@/lib/orders";
-import { pixInstructions } from "@/lib/payments";
+import { ensureStripePix, loadPaymentOrder, pixInstructions, pixQrSvg, syncPaymentIntent, type StripePixCharge } from "@/lib/payments";
 import { productImageUrl } from "@/lib/storage";
+import { isStripeConfigured } from "@/lib/stripe";
 
 export const dynamic = "force-dynamic";
 
@@ -35,17 +37,41 @@ const EVENT_LABEL: Record<string, string> = {
   card_failed: "Pagamento com cartão não concluído",
   expired: "Prazo de pagamento encerrado",
   stock_conflict: "Pagamento recebido · em análise pela loja",
+  dimona_status: "Produção e entrega atualizadas",
 };
 
 export default async function OrderPage({ params, searchParams }: Props) {
   const [{ token }, { pagamento }] = await Promise.all([params, searchParams]);
+  const stripeReady = isStripeConfigured();
+
+  // Confere o pagamento direto no Stripe antes de montar a página (rede de segurança do webhook).
+  const payment = /^[0-9a-f]{64}$/.test(token) ? await loadPaymentOrder({ token }).catch(() => null) : null;
+  if (payment?.status === "awaiting_payment" && payment.stripe_payment_intent_id && stripeReady) {
+    await syncPaymentIntent(payment).catch((err: unknown) => console.error("[pedido] sync", err));
+  }
+
   const order = await getOrderByToken(token);
   if (!order) notFound();
   const settings = await getStoreSettings();
 
   const status = ORDER_STATUS[order.status];
   const awaiting = order.status === "awaiting_payment";
-  const pix = awaiting && order.payment_method === "pix" && settings ? await pixInstructions(settings, order) : null;
+  const awaitingPix = awaiting && order.payment_method === "pix";
+
+  // Pix pelo Stripe (confirmação automática); se não sair, cai no Pix manual da loja.
+  let stripePix: StripePixCharge | null = null;
+  if (awaitingPix && order.pix_provider === "stripe") {
+    if (order.pix_qr_data) stripePix = { data: order.pix_qr_data, expiresAt: order.pix_qr_expires_at ?? null };
+    else if (payment && stripeReady) {
+      stripePix = await ensureStripePix(payment).catch((err: unknown) => {
+        console.error("[pedido] pix stripe", err);
+        return null;
+      });
+    }
+  }
+  const stripePixSvg = stripePix ? await pixQrSvg(stripePix.data) : null;
+  const pixDeadline = stripePix?.expiresAt ?? order.expires_at;
+  const pix = awaitingPix && !stripePix && settings ? await pixInstructions(settings, order) : null;
   const whatsapp = settings?.whatsapp;
   const whatsappText = encodeURIComponent(
     `Olá! Segue o comprovante do Pix do pedido nº ${order.number} (${formatBRL(order.total_cents)}).`,
@@ -53,7 +79,9 @@ export default async function OrderPage({ params, searchParams }: Props) {
 
   return (
     <div className="mx-auto max-w-[1100px] px-4 pt-10 pb-24 sm:px-8 sm:pt-14">
-      {awaiting ? <OrderAutoRefresh seconds={order.payment_method === "card" ? 6 : 20} /> : null}
+      {/* Cartão: o formulário do Stripe não pode ser recarregado enquanto o cliente digita. */}
+      {awaitingPix ? <OrderAutoRefresh seconds={stripePix ? 8 : 20} /> : null}
+      {awaiting && order.payment_method === "card" && pagamento === "retorno" ? <OrderAutoRefresh seconds={6} /> : null}
 
       <header className="flex flex-col gap-4 border-b border-line pb-8 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -86,6 +114,60 @@ export default async function OrderPage({ params, searchParams }: Props) {
 
       <div className="mt-10 grid gap-10 lg:grid-cols-12">
         <div className="grid content-start gap-10 lg:col-span-7">
+          {stripePix && stripePixSvg ? (
+            <section aria-labelledby="pix-title" className="rounded-xs border border-ink/15 bg-cream p-6 sm:p-8">
+              <h2 id="pix-title" className="type-brand text-xl">
+                Pague com Pix
+              </h2>
+              {pixDeadline ? (
+                <p className="mt-2 text-sm text-ink-soft">
+                  O código vale por mais <Deadline expiresAt={pixDeadline} serverNow={order.server_now} />.
+                </p>
+              ) : null}
+              <div className="mt-6 grid gap-6 sm:grid-cols-[200px_1fr] sm:items-start">
+                <div
+                  className="mx-auto w-[200px] rounded-xs bg-paper p-2"
+                  role="img"
+                  aria-label={`QR Code Pix de ${formatBRL(order.total_cents)}`}
+                  // SVG gerado no servidor pela biblioteca qrcode a partir do código do Stripe (sem dados do usuário).
+                  dangerouslySetInnerHTML={{ __html: stripePixSvg }}
+                />
+                <div className="grid gap-4">
+                  <p className="tabular text-3xl font-semibold">{formatBRL(order.total_cents)}</p>
+                  <CopyButton value={stripePix.data} label="Copiar código Pix" />
+                </div>
+              </div>
+              <ol className="mt-6 grid gap-2 border-t border-line pt-6 text-sm leading-relaxed text-ink-soft">
+                <li>1. Abra o app do seu banco e escolha pagar com Pix por QR Code ou copia e cola.</li>
+                <li>2. Confira o valor de {formatBRL(order.total_cents)} e confirme.</li>
+                <li>3. A confirmação é automática: esta página atualiza sozinha assim que o banco aprovar.</li>
+              </ol>
+            </section>
+          ) : null}
+
+          {awaitingPix && !stripePix && !pix ? (
+            <section aria-labelledby="pix-title" className="rounded-xs border border-gold/40 bg-[#fbf3e1] p-6 sm:p-8">
+              <h2 id="pix-title" className="type-brand text-xl">
+                Pix temporariamente indisponível
+              </h2>
+              <p className="mt-3 text-sm leading-relaxed text-gold-ink">
+                Seu pedido está reservado, mas não conseguimos gerar o QR Code agora. Atualize a página em alguns
+                instantes{whatsapp ? " ou fale com a gente pelo WhatsApp" : ""}.
+              </p>
+              {whatsapp ? (
+                <ButtonLink
+                  href={`https://wa.me/${whatsapp}?text=${encodeURIComponent(`Olá! Preciso de ajuda para pagar o pedido nº ${order.number}.`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="secondary"
+                  className="mt-4"
+                >
+                  Falar no WhatsApp {formatBrPhone(whatsapp)}
+                </ButtonLink>
+              ) : null}
+            </section>
+          ) : null}
+
           {pix ? (
             <section aria-labelledby="pix-title" className="rounded-xs border border-ink/15 bg-cream p-6 sm:p-8">
               <h2 id="pix-title" className="type-brand text-xl">
@@ -148,12 +230,12 @@ export default async function OrderPage({ params, searchParams }: Props) {
               </h2>
               {pagamento === "retorno" ? (
                 <p className="mt-3 text-ink-soft" role="status">
-                  Recebemos seu retorno do Stripe e estamos confirmando o pagamento. Esta página atualiza em instantes.
+                  Estamos confirmando o pagamento com o banco. Esta página atualiza em instantes.
                 </p>
               ) : (
                 <>
                   <p className="mt-3 text-ink-soft">
-                    O pagamento é processado pelo Stripe, em ambiente seguro. O pedido segue reservado
+                    Crédito ou débito, aqui mesmo no site. O pedido segue reservado
                     {order.expires_at ? (
                       <>
                         {" "}
@@ -162,20 +244,30 @@ export default async function OrderPage({ params, searchParams }: Props) {
                     ) : null}
                     .
                   </p>
-                  <div className="mt-6 max-w-sm">
-                    <PayWithCardButton token={token} />
+                  <div className="mt-6">
+                    <StripeCardPayment token={token} totalLabel={formatBRL(order.total_cents)} />
                   </div>
                 </>
               )}
             </section>
           ) : null}
 
-          {order.tracking_code ? (
+          {order.tracking_code || order.delivery_tracking_url ? (
             <section aria-labelledby="track-title" className="rounded-xs border border-line p-6">
               <h2 id="track-title" className="type-micro text-ink-soft">
-                Código de rastreio
+                Rastreio da entrega
               </h2>
-              <p className="tabular mt-3 text-xl font-medium">{order.tracking_code}</p>
+              {order.tracking_code ? <p className="tabular mt-3 text-xl font-medium">{order.tracking_code}</p> : null}
+              {order.delivery_tracking_url ? (
+                <a
+                  href={order.delivery_tracking_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex min-h-12 items-center border-b border-ink text-sm hover:text-gold-ink"
+                >
+                  Acompanhar produção e entrega
+                </a>
+              ) : null}
             </section>
           ) : null}
 

@@ -12,8 +12,12 @@ export const metadata: Metadata = {
 
 export default async function CheckoutPage() {
   const [settings, user] = await Promise.all([getStoreSettings(), getCurrentUser()]);
-  const pixAvailable = Boolean(settings?.pix_key && settings.pix_holder_name && settings.pix_city);
-  const cardAvailable = Boolean(settings?.card_enabled) && isStripeConfigured();
+  const stripeReady = isStripeConfigured();
+  const manualPix = Boolean(settings?.pix_key && settings.pix_holder_name && settings.pix_city);
+  // Pix pelo Stripe quando escolhido no painel e conectado; senão, Pix manual (se houver chave).
+  const pixAutomatic = settings?.pix_provider === "stripe" && stripeReady;
+  const pixAvailable = settings?.pix_provider === "stripe" ? stripeReady || manualPix : manualPix;
+  const cardAvailable = Boolean(settings?.card_enabled) && stripeReady;
 
   return (
     <div className="mx-auto max-w-[1200px] px-4 pt-10 pb-24 sm:px-8 sm:pt-14">
@@ -23,6 +27,7 @@ export default async function CheckoutPage() {
       </p>
       <CheckoutForm
         pixAvailable={pixAvailable}
+        pixAutomatic={pixAutomatic}
         cardAvailable={cardAvailable}
         pixHours={settings?.pix_expiration_hours ?? 24}
         prefill={{

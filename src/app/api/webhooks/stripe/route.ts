@@ -1,8 +1,10 @@
 // Hello World
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { serverEnv } from "@/lib/env";
-import { getStripe, outcomeForEvent } from "@/lib/stripe";
+import { afterOrderPaid } from "@/lib/order-fulfillment";
+import { applyPaymentIntentOutcome } from "@/lib/payments";
+import { getStripe, outcomeForEvent, paymentIntentOutcome } from "@/lib/stripe";
 import { getServiceDb } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -30,6 +32,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "assinatura inválida" }, { status: 400 });
   }
 
+  // Payment Element (cartão e Pix dentro do site).
+  const intentResult = paymentIntentOutcome(event);
+  if (intentResult) {
+    const orderId = intentResult.intent.metadata?.order_id ?? "";
+    if (!UUID.test(orderId)) return NextResponse.json({ received: true, ignored: "sem pedido associado" });
+    try {
+      const result = await applyPaymentIntentOutcome(orderId, intentResult.intent.id, intentResult.outcome, {
+        id: event.id,
+        type: event.type,
+      });
+      return NextResponse.json({ received: true, result });
+    } catch (err) {
+      console.error("[stripe-webhook]", event.id, err);
+      return NextResponse.json({ error: "falha ao registrar" }, { status: 500 });
+    }
+  }
+
+  // Pedidos antigos criados com o Stripe Checkout (redirecionamento).
   const result = outcomeForEvent(event);
   if (!result) return NextResponse.json({ received: true, ignored: event.type });
 
@@ -56,5 +76,6 @@ export async function POST(request: Request) {
     console.error("[stripe-webhook]", event.id, error.message);
     return NextResponse.json({ error: "falha ao registrar" }, { status: 500 });
   }
+  if (data === "paid") after(() => afterOrderPaid(orderId));
   return NextResponse.json({ received: true, result: data });
 }

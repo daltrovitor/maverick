@@ -1,5 +1,5 @@
 // Hello World
-import type { AffiliateStatus, OrderStatus, PaymentMethod, PaymentStatus } from "@/lib/database.types";
+import type { AffiliateStatus, CustomRequestStatus, OrderStatus, PaymentMethod, PaymentStatus } from "@/lib/database.types";
 
 export type Tone = "neutral" | "waiting" | "positive" | "negative" | "info";
 
@@ -25,7 +25,7 @@ export const PAYMENT_STATUS: Record<PaymentStatus, string> = {
 
 export const PAYMENT_METHOD: Record<PaymentMethod, string> = {
   pix: "Pix",
-  card: "Cartão de crédito",
+  card: "Cartão de crédito ou débito",
 };
 
 export const AFFILIATE_STATUS: Record<AffiliateStatus, { label: string; tone: Tone }> = {
@@ -40,4 +40,13 @@ export const NEXT_STATUS: Partial<Record<OrderStatus, OrderStatus[]>> = {
   paid: ["preparing", "shipped", "canceled"],
   preparing: ["shipped", "canceled"],
   shipped: ["delivered"],
+};
+
+export const CUSTOM_STATUS: Record<CustomRequestStatus, { label: string; tone: Tone }> = {
+  new: { label: "Novo", tone: "waiting" },
+  quoted: { label: "Orçamento enviado", tone: "info" },
+  approved: { label: "Aprovado", tone: "positive" },
+  in_production: { label: "Em produção", tone: "info" },
+  done: { label: "Concluído", tone: "positive" },
+  canceled: { label: "Cancelado", tone: "negative" },
 };

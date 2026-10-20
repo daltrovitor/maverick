@@ -1,11 +1,12 @@
 // Hello World
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { DimonaOrderPanel } from "@/components/admin/DimonaOrderPanel";
 import { OrderActions } from "@/components/admin/OrderActions";
 import { AdminHeader, Panel } from "@/components/admin/ui";
 import { Badge } from "@/components/ui/Badge";
 import { requireAdmin } from "@/lib/auth";
-import { formatBRL, formatBrPhone, formatCep } from "@/lib/br";
+import { formatBRL, formatBrPhone, formatCep, formatCpf } from "@/lib/br";
 import { ORDER_STATUS, PAYMENT_METHOD, PAYMENT_STATUS } from "@/lib/order-status";
 import { siteUrl } from "@/lib/env";
 
@@ -23,6 +24,10 @@ const EVENT: Record<string, string> = {
   expired: "Expirado automaticamente",
   stock_conflict: "Pago sem estoque — avaliar reembolso",
   note: "Observação",
+  payment_attempt_failed: "Tentativa de cartão recusada",
+  dimona_sent: "Enviado à Dimona",
+  dimona_failed: "Falha ao enviar à Dimona",
+  dimona_status: "Atualização da Dimona",
 };
 
 export default async function AdminOrderDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -35,6 +40,11 @@ export default async function AdminOrderDetail({ params }: { params: Promise<{ i
     db.from("order_events").select("*").eq("order_id", id).order("created_at"),
   ]);
   if (!order) notFound();
+  const productIds = [...new Set((items ?? []).map((i) => i.product_id).filter((v): v is string => Boolean(v)))];
+  const { data: dimonaProducts } = productIds.length
+    ? await db.from("products").select("id").in("id", productIds).eq("fulfillment", "dimona")
+    : { data: [] as { id: string }[] };
+  const hasDimonaItems = (dimonaProducts ?? []).length > 0;
 
   const actorIds = [...new Set((events ?? []).map((e) => e.actor_id).filter((v): v is string => Boolean(v)))];
   const { data: actors } = actorIds.length
@@ -94,7 +104,15 @@ export default async function AdminOrderDetail({ params }: { params: Promise<{ i
                   </span>
                   <span className="text-xs text-muted">
                     {DATE.format(new Date(e.created_at))} ·{" "}
-                    {e.actor_kind === "admin" ? `admin: ${actorName(e.actor_id) ?? "—"}` : e.actor_kind === "stripe" ? "Stripe" : e.actor_kind === "customer" ? "cliente" : "sistema"}
+                    {e.actor_kind === "admin"
+                      ? `admin: ${actorName(e.actor_id) ?? "—"}`
+                      : e.actor_kind === "stripe"
+                        ? "Stripe"
+                        : e.actor_kind === "dimona"
+                          ? "Dimona"
+                          : e.actor_kind === "customer"
+                            ? "cliente"
+                            : "sistema"}
                   </span>
                   {e.message ? <span className="text-ink-soft">{e.message}</span> : null}
                 </li>
@@ -105,8 +123,27 @@ export default async function AdminOrderDetail({ params }: { params: Promise<{ i
 
         <div className="grid content-start gap-6">
           <Panel title="Ações">
-            <OrderActions orderId={order.id} status={order.status} method={order.payment_method} paymentStatus={order.payment_status} />
+            <OrderActions
+              orderId={order.id}
+              status={order.status}
+              method={order.payment_method}
+              paymentStatus={order.payment_status}
+              pixProvider={order.pix_provider}
+            />
           </Panel>
+          {hasDimonaItems || order.dimona_order_id ? (
+            <Panel title="Dimona">
+              <DimonaOrderPanel
+                orderId={order.id}
+                paid={["paid", "preparing", "shipped", "delivered"].includes(order.status)}
+                dimonaId={order.dimona_order_id}
+                status={order.dimona_status}
+                trackingUrl={order.dimona_tracking_url}
+                lastError={order.dimona_last_error}
+                sentAt={order.dimona_sent_at ? DATE.format(new Date(order.dimona_sent_at)) : null}
+              />
+            </Panel>
+          ) : null}
           <Panel title="Cliente e entrega">
             <div className="grid gap-1 text-sm">
               <p className="font-medium">{order.customer_name}</p>
@@ -118,6 +155,7 @@ export default async function AdminOrderDetail({ params }: { params: Promise<{ i
                   {formatBrPhone(order.customer_phone)}
                 </a>
               </p>
+              {order.customer_document ? <p className="tabular">CPF {formatCpf(order.customer_document)}</p> : null}
               <p className="mt-3">
                 {addr.street}, {addr.number}
                 {addr.complement ? ` · ${addr.complement}` : ""}

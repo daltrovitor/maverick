@@ -15,7 +15,7 @@ import {
   type FormEvent,
 } from "react";
 import { CreditCard, QrCode } from "lucide-react";
-import { formatBRL, formatCep, onlyDigits, UFS } from "@/lib/br";
+import { formatBRL, formatCep, formatCpf, onlyDigits, UFS } from "@/lib/br";
 import { placeOrder, quoteCheckout, type QuoteResult } from "@/app/(site)/checkout/actions";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { SelectField, TextAreaField, TextField } from "@/components/ui/Field";
@@ -24,6 +24,8 @@ import { clearStoredCoupon, readStoredCoupon } from "@/components/cart/CouponCap
 
 interface Props {
   readonly pixAvailable: boolean;
+  /** Pix pelo Stripe: QR Code com confirmação automática (senão, conferência manual). */
+  readonly pixAutomatic: boolean;
   readonly cardAvailable: boolean;
   readonly pixHours: number;
   readonly prefill: { name: string; email: string; phone: string };
@@ -38,6 +40,7 @@ interface FormState {
   name: string;
   email: string;
   phone: string;
+  document: string;
   cep: string;
   street: string;
   number: string;
@@ -48,13 +51,14 @@ interface FormState {
   notes: string;
 }
 
-export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }: Props) {
+export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHours, prefill }: Props) {
   const router = useRouter();
   const { lines, ready, subtotalCents, clear, notice } = useCart();
   const [form, setForm] = useState<FormState>({
     name: prefill.name,
     email: prefill.email,
     phone: prefill.phone ? prefill.phone.replace(/^55/, "") : "",
+    document: "",
     cep: "",
     street: "",
     number: "",
@@ -170,7 +174,7 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
       const result = await placeOrder({
         idempotencyKey,
         paymentMethod: method,
-        customer: { name: form.name, email: form.email, phone: form.phone },
+        customer: { name: form.name, email: form.email, phone: form.phone, document: form.document },
         address: {
           cep: form.cep,
           street: form.street,
@@ -191,8 +195,7 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
       }
       clear();
       clearStoredCoupon();
-      if (result.external) window.location.assign(result.redirectTo);
-      else router.push(result.redirectTo);
+      router.push(result.redirectTo);
     });
   };
 
@@ -237,6 +240,10 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
               placeholder="(62) 99999-0000" value={form.phone} onChange={(e) => set("phone", e.target.value)}
               error={fieldError("customer.phone")} />
           </div>
+          <TextField label="CPF" name="document" inputMode="numeric" required placeholder="000.000.000-00"
+            maxLength={14} value={form.document} wrapperClassName="sm:max-w-[calc(50%-0.625rem)]"
+            onChange={(e) => set("document", formatCpf(e.target.value))} error={fieldError("customer.document")}
+            hint="Exigido para a nota fiscal e o envio." />
         </fieldset>
 
         <fieldset className="grid gap-5">
@@ -295,9 +302,11 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
                 icon={<QrCode className="size-5" aria-hidden="true" />}
                 title="Pix"
                 description={
-                  pixAvailable
-                    ? `QR Code e copia-e-cola. Confirmamos o recebimento manualmente; o pedido fica reservado por ${pixHours}h.`
-                    : "Indisponível no momento."
+                  !pixAvailable
+                    ? "Indisponível no momento."
+                    : pixAutomatic
+                      ? "QR Code no valor exato, gerado na hora. A confirmação é automática."
+                      : `QR Code e copia-e-cola. Confirmamos o recebimento manualmente; o pedido fica reservado por ${pixHours}h.`
                 }
               />
               <PaymentOption
@@ -306,9 +315,11 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
                 onSelect={setMethod}
                 disabled={!cardAvailable}
                 icon={<CreditCard className="size-5" aria-hidden="true" />}
-                title="Cartão de crédito"
+                title="Cartão de crédito ou débito"
                 description={
-                  cardAvailable ? "Pagamento seguro pelo Stripe. Seus dados de cartão não passam pela loja." : "Indisponível no momento."
+                  cardAvailable
+                    ? "Pague aqui mesmo no site, em ambiente seguro do Stripe. Os dados do cartão não passam pela loja."
+                    : "Indisponível no momento."
                 }
               />
             </div>
@@ -405,7 +416,7 @@ export function CheckoutForm({ pixAvailable, cardAvailable, pixHours, prefill }:
             loading={pending}
             disabled={!quote || quoting || !method || lines.length === 0}
           >
-            {method === "card" ? "Ir para o pagamento seguro" : "Finalizar com Pix"}
+            {method === "card" ? "Continuar para o pagamento" : "Gerar QR Code Pix"}
           </Button>
           <p className="mt-3 text-center text-xs leading-relaxed text-muted">
             Ao finalizar você concorda com nossas{" "}

@@ -11,9 +11,9 @@ import { Panel } from "@/components/admin/ui";
 import { Button } from "@/components/ui/Button";
 import { CheckboxField, SelectField, TextAreaField, TextField } from "@/components/ui/Field";
 import { parseBRLToCents } from "@/lib/br";
-import type { ProductStatus } from "@/lib/database.types";
-import type { EditorProduct, EditorVariant } from "@/components/admin/product-editor-model";
-import { slugify } from "@/lib/validation";
+import type { Fulfillment, ProductStatus } from "@/lib/database.types";
+import type { EditorDimonaFiles, EditorProduct, EditorVariant } from "@/components/admin/product-editor-model";
+import { DIMONA_SIDES, slugify } from "@/lib/validation";
 
 interface VariantPayload {
   id?: string;
@@ -24,6 +24,7 @@ interface VariantPayload {
   compareAtCents: number | null;
   stock: number;
   isActive: boolean;
+  dimonaSkuId: string;
 }
 
 const newVariant = (): EditorVariant => ({
@@ -35,6 +36,7 @@ const newVariant = (): EditorVariant => ({
   compareAt: "",
   stock: "0",
   isActive: true,
+  dimonaSkuId: "",
 });
 
 export function ProductEditor({
@@ -75,6 +77,7 @@ export function ProductEditor({
         compareAtCents: compareAt,
         stock,
         isActive: v.isActive,
+        dimonaSkuId: v.dimonaSkuId,
       });
     }
     startTransition(async () => {
@@ -86,6 +89,9 @@ export function ProductEditor({
         specs: p.specs.filter((s) => s.label.trim() && s.value.trim()),
         categoryId: p.categoryId || null,
         status: p.status,
+        fulfillment: p.fulfillment,
+        dimonaDesigns: p.dimonaDesigns,
+        dimonaMocks: p.dimonaMocks,
         isFeatured: p.isFeatured,
         position: Number.parseInt(p.position, 10) || 0,
         seoTitle: p.seoTitle,
@@ -176,6 +182,10 @@ export function ProductEditor({
                 <TextField label="Preço (R$)" required inputMode="decimal" value={v.price} onChange={(e) => setVariant(v.key, { price: e.target.value })} wrapperClassName="sm:col-span-2" placeholder="129,90" />
                 <TextField label="Preço “de” (opcional)" inputMode="decimal" value={v.compareAt} onChange={(e) => setVariant(v.key, { compareAt: e.target.value })} wrapperClassName="sm:col-span-2" />
                 <TextField label="Estoque" required type="number" min={0} inputMode="numeric" value={v.stock} onChange={(e) => setVariant(v.key, { stock: e.target.value })} wrapperClassName="sm:col-span-2" />
+                {p.fulfillment === "dimona" ? (
+                  <TextField label="SKU Dimona" value={v.dimonaSkuId} onChange={(e) => setVariant(v.key, { dimonaSkuId: e.target.value.trim() })}
+                    wrapperClassName="sm:col-span-3" placeholder="Ex.: 010603110108" hint="Código do produto/cor/tamanho no catálogo da Dimona." />
+                ) : null}
                 <div className="flex items-center justify-between gap-3 sm:col-span-6">
                   <CheckboxField label="Variante ativa" checked={v.isActive} onChange={(e) => setVariant(v.key, { isActive: e.target.checked })} />
                   <Button
@@ -191,6 +201,25 @@ export function ProductEditor({
               </li>
             ))}
           </ul>
+        </Panel>
+
+        <Panel title="Produção">
+          <div className="grid gap-4">
+            <SelectField label="Quem produz e envia" value={p.fulfillment} onChange={(e) => set("fulfillment", e.target.value as Fulfillment)}>
+              <option value="stock">Estoque próprio (a loja separa e envia)</option>
+              <option value="dimona">Dimona (impressão sob demanda)</option>
+            </SelectField>
+            {p.fulfillment === "dimona" ? (
+              <>
+                <p className="text-xs leading-relaxed text-muted">
+                  Ao ser pago, o pedido é enviado à Dimona com o SKU de cada variante e os links abaixo (https, arquivo de
+                  impressão em PNG). Como a produção é sob demanda, deixe um estoque alto (ex.: 999) nas variantes.
+                </p>
+                <DimonaFilesFields title="Artes de impressão" files={p.dimonaDesigns} onChange={(files) => set("dimonaDesigns", files)} />
+                <DimonaFilesFields title="Mockups (opcional)" files={p.dimonaMocks} onChange={(files) => set("dimonaMocks", files)} />
+              </>
+            ) : null}
+          </div>
         </Panel>
 
         <Panel title="Fotos">
@@ -259,5 +288,34 @@ export function ProductEditor({
         </Panel>
       </div>
     </form>
+  );
+}
+
+function DimonaFilesFields({
+  title,
+  files,
+  onChange,
+}: {
+  readonly title: string;
+  readonly files: EditorDimonaFiles;
+  readonly onChange: (files: EditorDimonaFiles) => void;
+}) {
+  return (
+    <fieldset className="grid gap-3 rounded-sm border border-line p-4">
+      <legend className="px-1 text-sm font-medium">{title}</legend>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {DIMONA_SIDES.map((side) => (
+          <TextField
+            key={side.value}
+            label={side.label}
+            type="url"
+            inputMode="url"
+            placeholder="https://"
+            value={files[side.value]}
+            onChange={(e) => onChange({ ...files, [side.value]: e.target.value })}
+          />
+        ))}
+      </div>
+    </fieldset>
   );
 }

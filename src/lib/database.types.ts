@@ -19,6 +19,13 @@ export type ProductStatus = "draft" | "active" | "archived";
 export type AffiliateStatus = "pending" | "info_requested" | "approved" | "rejected";
 export type AffiliatePlatform = "instagram" | "tiktok" | "youtube" | "x" | "facebook" | "kwai" | "outra";
 export type PixKeyType = "cpf" | "cnpj" | "email" | "phone" | "random";
+export type PixProvider = "stripe" | "manual";
+export type Fulfillment = "stock" | "dimona";
+export type DimonaShippingSpeed = "pac" | "sedex";
+export type CustomRequestStatus = "new" | "quoted" | "approved" | "in_production" | "done" | "canceled";
+export type CapModel = "trucker" | "dad_hat" | "snapback" | "aba_reta" | "bucket" | "nao_sei";
+export type CapTechnique = "bordado" | "estampa" | "patch" | "nao_sei";
+export type DesignMime = "image/png" | "image/jpeg" | "image/webp" | "application/pdf";
 export type OrderEventType =
   | "created"
   | "pix_confirmed"
@@ -28,7 +35,11 @@ export type OrderEventType =
   | "status_changed"
   | "expired"
   | "stock_conflict"
-  | "note";
+  | "note"
+  | "payment_attempt_failed"
+  | "dimona_sent"
+  | "dimona_failed"
+  | "dimona_status";
 
 export type ShippingAddress = {
   cep: string;
@@ -75,6 +86,7 @@ export type ProductRow = Timestamps & {
   position: number;
   seo_title: string | null;
   seo_description: string | null;
+  fulfillment: Fulfillment;
 };
 
 export type VariantRow = Timestamps & {
@@ -88,6 +100,18 @@ export type VariantRow = Timestamps & {
   stock: number;
   is_active: boolean;
   position: number;
+  dimona_sku_id: string | null;
+};
+
+/** Lados aceitos pela API v3 da Dimona para artes e mockups. */
+export type DimonaSide = "front" | "back" | "left_sleeve" | "right_sleeve" | "inner_label" | "outer_label";
+export type DimonaFiles = Partial<Record<DimonaSide, string>>;
+
+export type ProductDimonaRow = {
+  product_id: string;
+  designs: DimonaFiles;
+  mocks: DimonaFiles;
+  updated_at: string;
 };
 
 export type ImageRow = {
@@ -117,6 +141,16 @@ export type StoreSettingsRow = {
   announcement: string | null;
   shipping_policy: string | null;
   exchange_policy: string | null;
+  pix_provider: PixProvider;
+  custom_enabled: boolean;
+  custom_unit_price_cents: number | null;
+  custom_min_quantity: number;
+  custom_max_quantity: number;
+  custom_step_units: number;
+  custom_step_bps: number;
+  custom_max_discount_bps: number;
+  dimona_auto_forward: boolean;
+  dimona_shipping_speed: DimonaShippingSpeed;
   updated_at: string;
   updated_by: string | null;
 };
@@ -215,6 +249,17 @@ export type OrderRow = Timestamps & {
   shipped_at: string | null;
   delivered_at: string | null;
   canceled_at: string | null;
+  customer_document: string | null;
+  pix_provider: PixProvider | null;
+  pix_qr_data: string | null;
+  pix_qr_expires_at: string | null;
+  dimona_order_id: string | null;
+  dimona_status: string | null;
+  dimona_status_id: number | null;
+  dimona_tracking_url: string | null;
+  dimona_sent_at: string | null;
+  dimona_updated_at: string | null;
+  dimona_last_error: string | null;
 };
 
 export type OrderItemRow = {
@@ -237,10 +282,34 @@ export type OrderEventRow = {
   type: OrderEventType;
   from_status: string | null;
   to_status: string | null;
-  actor_kind: "system" | "admin" | "customer" | "stripe";
+  actor_kind: "system" | "admin" | "customer" | "stripe" | "dimona";
   actor_id: string | null;
   message: string | null;
   created_at: string;
+};
+
+export type CustomCapRequestRow = Timestamps & {
+  id: string;
+  number: number;
+  status: CustomRequestStatus;
+  customer_name: string;
+  customer_email: string;
+  customer_phone: string;
+  quantity: number;
+  cap_model: CapModel;
+  cap_color: string | null;
+  technique: CapTechnique;
+  notes: string | null;
+  design_path: string;
+  design_mime: DesignMime;
+  design_size: number;
+  unit_price_cents: number | null;
+  discount_bps: number;
+  estimated_total_cents: number | null;
+  privacy_consent_at: string;
+  ip_hash: string | null;
+  admin_notes: string | null;
+  updated_by: string | null;
 };
 
 type Table<Row, Required extends keyof Row = never, Rel extends Relationship[] = []> = {
@@ -302,6 +371,20 @@ export type Database = {
           },
         ]
       >;
+      product_dimona: Table<
+        ProductDimonaRow,
+        "product_id",
+        [
+          {
+            foreignKeyName: "product_dimona_product_id_fkey";
+            columns: ["product_id"];
+            isOneToOne: true;
+            referencedRelation: "products";
+            referencedColumns: ["id"];
+          },
+        ]
+      >;
+      custom_cap_requests: Table<CustomCapRequestRow>;
       store_settings: Table<StoreSettingsRow>;
       shipping_rates: Table<ShippingRateRow, "uf" | "price_cents">;
       affiliate_applications: Table<AffiliateApplicationRow>;
@@ -390,6 +473,42 @@ export type Database = {
           p_outcome: "paid" | "failed" | "expired";
         };
         Returns: string;
+      };
+      attach_payment_intent: {
+        Args: {
+          p_order_id: string;
+          p_payment_intent_id: string;
+          p_pix_qr_data?: string | null;
+          p_pix_qr_expires_at?: string | null;
+        };
+        Returns: undefined;
+      };
+      process_payment_intent_event: {
+        Args: {
+          p_event_id: string;
+          p_event_type: string;
+          p_order_id: string;
+          p_payment_intent_id: string;
+          p_outcome: "paid" | "failed" | "canceled";
+        };
+        Returns: string;
+      };
+      dimona_mark_sent: { Args: { p_order_id: string; p_dimona_id: string | null; p_message?: string | null }; Returns: undefined };
+      dimona_mark_failed: { Args: { p_order_id: string; p_error: string }; Returns: undefined };
+      dimona_apply_status: {
+        Args: {
+          p_dimona_id: string | null;
+          p_seller_id: string | null;
+          p_status_id: number | null;
+          p_status_name: string | null;
+          p_tracking_url: string | null;
+        };
+        Returns: string;
+      };
+      submit_custom_request: { Args: { p: Json; p_ip_hash?: string | null }; Returns: Json };
+      custom_discount_bps: {
+        Args: { p_quantity: number; p_step_units: number; p_step_bps: number; p_max_bps: number };
+        Returns: number;
       };
       get_order_by_token: { Args: { p_token: string }; Returns: Json };
       submit_affiliate_application: { Args: { p: Json; p_ip_hash?: string | null }; Returns: Json };

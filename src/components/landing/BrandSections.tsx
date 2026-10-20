@@ -12,7 +12,7 @@ const FACTS = [
   {
     n: "02",
     title: "Pix ou cartão",
-    text: "Pix com QR Code e confirmação pela equipe, ou cartão de crédito em ambiente seguro do Stripe.",
+    text: "Pix com QR Code no valor exato ou cartão de crédito e débito, pagos aqui mesmo no site, em ambiente seguro do Stripe.",
   },
   {
     n: "03",

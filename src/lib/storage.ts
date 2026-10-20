@@ -1,5 +1,7 @@
 // Hello World
 export const PRODUCT_IMAGES_BUCKET = "product-images";
+/** Bucket privado das artes de boné personalizado (acesso só por URL assinada). */
+export const CUSTOM_DESIGNS_BUCKET = "custom-designs";
 
 /** URL pública de uma foto do bucket de produtos (servida pela CDN do Supabase). */
 export function productImageUrl(storagePath: string | null | undefined): string | null {

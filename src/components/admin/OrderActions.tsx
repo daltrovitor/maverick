@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { confirmPix, rejectPix, setOrderStatus, type AdminResult } from "@/app/admin/actions/orders";
 import { Button } from "@/components/ui/Button";
 import { TextAreaField, TextField } from "@/components/ui/Field";
-import type { OrderStatus, PaymentMethod } from "@/lib/database.types";
+import type { OrderStatus, PaymentMethod, PixProvider } from "@/lib/database.types";
 import { NEXT_STATUS, ORDER_STATUS } from "@/lib/order-status";
 
 interface Props {
@@ -15,9 +15,10 @@ interface Props {
   readonly status: OrderStatus;
   readonly method: PaymentMethod;
   readonly paymentStatus: string;
+  readonly pixProvider: PixProvider | null;
 }
 
-export function OrderActions({ orderId, status, method, paymentStatus }: Props) {
+export function OrderActions({ orderId, status, method, paymentStatus, pixProvider }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [note, setNote] = useState("");
@@ -39,10 +40,12 @@ export function OrderActions({ orderId, status, method, paymentStatus }: Props) 
     });
   };
 
-  const pixAwaiting = method === "pix" && (status === "awaiting_payment" || status === "expired");
+  // Pix do Stripe é conferido automaticamente; a confirmação manual fica só para o Pix por chave.
+  const pixAwaiting = method === "pix" && pixProvider !== "stripe" && (status === "awaiting_payment" || status === "expired");
+  const automaticAwaiting = status === "awaiting_payment" && (method === "card" || pixProvider === "stripe");
   const next = NEXT_STATUS[status] ?? [];
 
-  if (!pixAwaiting && next.length === 0 && !(status === "awaiting_payment" && method === "card")) {
+  if (!pixAwaiting && next.length === 0 && !automaticAwaiting) {
     return <p className="text-sm text-muted">Nenhuma ação disponível para este pedido.</p>;
   }
 
@@ -83,7 +86,7 @@ export function OrderActions({ orderId, status, method, paymentStatus }: Props) 
         </div>
       ) : null}
 
-      {status === "awaiting_payment" && method === "card" ? (
+      {automaticAwaiting ? (
         <div className="grid gap-3">
           <p className="text-sm text-ink-soft">
             Aguardando a confirmação automática do Stripe. Cancelar libera o estoque reservado.

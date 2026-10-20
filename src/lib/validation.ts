@@ -39,6 +39,11 @@ export const ufSchema = z
 
 export const emailSchema = z.string().trim().toLowerCase().pipe(z.email("E-mail inválido").max(160));
 
+export const cpfSchema = z
+  .string()
+  .transform((v) => v.replace(/\D/g, ""))
+  .refine(isValidCpf, "CPF inválido");
+
 export const cartItemSchema = z.object({
   variantId: z.uuid(),
   quantity: z.number().int().min(1).max(20),
@@ -63,6 +68,7 @@ export const checkoutSchema = z.object({
     name: trimmed(3, 120, "Nome"),
     email: emailSchema,
     phone: phoneSchema,
+    document: cpfSchema,
   }),
   address: addressSchema,
   items: cartSchema,
@@ -108,10 +114,7 @@ export const AFFILIATE_PLATFORMS = [
 
 export const affiliateSchema = z.object({
   fullName: trimmed(5, 120, "Nome completo").refine((v) => v.includes(" "), "Informe nome e sobrenome"),
-  cpf: z
-    .string()
-    .transform((v) => v.replace(/\D/g, ""))
-    .refine(isValidCpf, "CPF inválido"),
+  cpf: cpfSchema,
   phone: phoneSchema,
   email: emailSchema,
   platform: z.enum(AFFILIATE_PLATFORMS.map((p) => p.value) as [string, ...string[]]),
@@ -165,7 +168,36 @@ export const variantInputSchema = z.object({
   compareAtCents: z.number().int().positive().nullable().optional(),
   stock: z.number().int().min(0).max(1_000_000),
   isActive: z.boolean(),
+  dimonaSkuId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9._-]{0,40}$/, "SKU Dimona: use só letras, números, ponto, hífen ou sublinhado")
+    .optional()
+    .transform((v) => v || null),
 });
+
+export const DIMONA_SIDES = [
+  { value: "front", label: "Frente" },
+  { value: "back", label: "Costas" },
+  { value: "left_sleeve", label: "Lateral esquerda" },
+  { value: "right_sleeve", label: "Lateral direita" },
+] as const;
+
+const httpsUrl = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((v) => v === "" || /^https:\/\/\S+$/i.test(v), "Use um link https:// completo")
+  .transform((v) => v || undefined);
+
+const dimonaFilesSchema = z
+  .object({
+    front: httpsUrl.optional(),
+    back: httpsUrl.optional(),
+    left_sleeve: httpsUrl.optional(),
+    right_sleeve: httpsUrl.optional(),
+  })
+  .transform((files) => Object.fromEntries(Object.entries(files).filter(([, url]) => Boolean(url))));
 
 export const productInputSchema = z
   .object({
@@ -178,6 +210,9 @@ export const productInputSchema = z
       .max(12),
     categoryId: z.uuid().nullable(),
     status: z.enum(["draft", "active", "archived"]),
+    fulfillment: z.enum(["stock", "dimona"]),
+    dimonaDesigns: dimonaFilesSchema,
+    dimonaMocks: dimonaFilesSchema,
     isFeatured: z.boolean(),
     position: z.number().int().min(0).max(100000),
     seoTitle: z.string().trim().max(70).optional(),
@@ -208,6 +243,14 @@ export const productInputSchema = z
     for (const img of p.images) {
       if (!img.storagePath.startsWith(`products/${p.id}/`)) {
         ctx.addIssue({ code: "custom", path: ["images"], message: "Imagem de outro produto" });
+      }
+    }
+    if (p.fulfillment === "dimona" && p.status === "active") {
+      if (p.variants.some((v) => v.isActive && !v.dimonaSkuId)) {
+        ctx.addIssue({ code: "custom", path: ["variants"], message: "Produto Dimona: informe o SKU Dimona de cada variante ativa" });
+      }
+      if (Object.keys(p.dimonaDesigns).length === 0) {
+        ctx.addIssue({ code: "custom", path: ["dimonaDesigns"], message: "Produto Dimona: informe o link de ao menos uma arte" });
       }
     }
   });
@@ -266,11 +309,65 @@ export const settingsSchema = z.object({
     .regex(/^[A-Z ]{0,15}$/, "Até 15 letras sem acento")
     .transform((v) => v || null),
   pixExpirationHours: z.coerce.number().int().min(1).max(168),
+  pixProvider: z.enum(["stripe", "manual"]),
   cardEnabled: z.boolean(),
+  customEnabled: z.boolean(),
+  customUnitPriceCents: z.number().int().min(100, "Preço mínimo: R$ 1,00").max(1_000_000).nullable(),
+  customMinQuantity: z.coerce.number().int().min(1).max(10000),
+  customMaxQuantity: z.coerce.number().int().min(1).max(100000),
+  customStepUnits: z.coerce.number().int().min(1, "A faixa precisa de ao menos 1 unidade").max(10000),
+  customStepBps: z.number().int().min(0).max(9000, "Desconto por faixa: no máximo 90%"),
+  customMaxDiscountBps: z.number().int().min(0).max(9000, "Desconto máximo: 90%"),
+  dimonaAutoForward: z.boolean(),
+  dimonaShippingSpeed: z.enum(["pac", "sedex"]),
   announcement: z.string().trim().max(140).transform((v) => v || null),
   shippingPolicy: z.string().trim().max(8000).transform((v) => v || null),
   exchangePolicy: z.string().trim().max(8000).transform((v) => v || null),
 });
+
+export const CAP_MODELS = [
+  { value: "trucker", label: "Trucker (tela atrás)" },
+  { value: "dad_hat", label: "Dad hat (aba curva, sem estrutura)" },
+  { value: "snapback", label: "Snapback (aba reta, estruturado)" },
+  { value: "aba_reta", label: "Aba reta fechado" },
+  { value: "bucket", label: "Bucket" },
+  { value: "nao_sei", label: "Ainda não sei, quero sugestão" },
+] as const;
+
+export const CAP_TECHNIQUES = [
+  { value: "bordado", label: "Bordado" },
+  { value: "estampa", label: "Estampa" },
+  { value: "patch", label: "Patch" },
+  { value: "nao_sei", label: "Quero sugestão" },
+] as const;
+
+export const DESIGN_MIMES = ["image/png", "image/jpeg", "image/webp", "application/pdf"] as const;
+export const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
+
+export const designUploadSchema = z.object({
+  fileName: z.string().trim().min(1).max(200),
+  mime: z.enum(DESIGN_MIMES, { message: "Envie PNG, JPG, WEBP ou PDF" }),
+  size: z.number().int().min(1).max(DESIGN_MAX_BYTES, "A arte deve ter no máximo 10 MB"),
+});
+
+export const customRequestSchema = z.object({
+  name: trimmed(3, 120, "Nome"),
+  email: emailSchema,
+  phone: phoneSchema,
+  quantity: z.number().int().min(1).max(100000),
+  capModel: z.enum(CAP_MODELS.map((m) => m.value) as [string, ...string[]]),
+  capColor: z.string().trim().max(60).optional().transform((v) => v || null),
+  technique: z.enum(CAP_TECHNIQUES.map((t) => t.value) as [string, ...string[]]),
+  notes: z.string().trim().max(2000).optional().transform((v) => v || null),
+  design: z.object({
+    path: z.string().regex(/^requests\/[0-9a-f-]{36}\/[A-Za-z0-9._-]{1,120}$/, "Envie a arte novamente"),
+    mime: z.enum(DESIGN_MIMES),
+    size: z.number().int().min(1).max(DESIGN_MAX_BYTES),
+  }),
+  privacyConsent: z.literal(true, { message: "É preciso aceitar o tratamento dos dados" }),
+});
+
+export type CustomRequestInput = z.input<typeof customRequestSchema>;
 
 /** Primeira mensagem legível de um ZodError. */
 export function firstIssue(error: z.ZodError): string {

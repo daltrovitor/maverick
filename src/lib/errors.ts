@@ -36,6 +36,9 @@ const MESSAGES: Record<string, string> = {
   variant_duplicate: "Há variantes repetidas (mesma cor e tamanho).",
   coupon_code_taken: "Já existe um cupom com este código.",
   category_slug_taken: "Já existe uma categoria com este endereço (slug).",
+  custom_unavailable: "Os pedidos de boné personalizado estão pausados no momento.",
+  custom_quantity_range: "Quantidade fora do limite aceito para personalizados.",
+  dimona_incomplete: "Produto Dimona publicado precisa do SKU Dimona em cada variante ativa e de ao menos uma arte.",
 };
 
 const CONSTRAINT_CODES: Record<string, string> = {

@@ -10,6 +10,11 @@ const publicSchema = z.object({
   NEXT_PUBLIC_SITE_URL: z.url().default("http://localhost:3000"),
   NEXT_PUBLIC_SUPABASE_URL: z.url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(20).optional(),
+  // Chave publicável do Stripe: monta o Payment Element (cartão e Pix) dentro do site.
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z
+    .string()
+    .regex(/^pk_(test|live)_/, "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY deve começar com pk_test_/pk_live_")
+    .optional(),
 });
 
 const serverSchema = z.object({
@@ -23,6 +28,13 @@ const serverSchema = z.object({
   IP_HASH_SALT: z.string().min(16).optional(),
   CRON_SECRET: z.string().min(16).optional(),
   MESHY_API_KEY: z.string().min(10).optional(),
+  // Dimona (impressão sob demanda): chave da conta em camisadimona.com.br.
+  DIMONA_API_KEY: z.string().min(8).optional(),
+  DIMONA_API_BASE_URL: z.url().default("https://admin.camisadimona.com.br"),
+  // Avisos por e-mail (Resend): pedidos personalizados e vendas pagas chegam à equipe.
+  RESEND_API_KEY: z.string().startsWith("re_").optional(),
+  NOTIFY_EMAIL_TO: z.email().default("viraweb.online@gmail.com"),
+  EMAIL_FROM: z.string().min(3).default("Maverick Capshop <onboarding@resend.dev>"),
 });
 
 function blankToUndefined(source: Record<string, string | undefined>) {
@@ -34,6 +46,7 @@ export const publicEnv = publicSchema.parse(
     NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
   }),
 );
 
@@ -46,6 +59,11 @@ export function serverEnv() {
       IP_HASH_SALT: process.env.IP_HASH_SALT,
       CRON_SECRET: process.env.CRON_SECRET,
       MESHY_API_KEY: process.env.MESHY_API_KEY,
+      DIMONA_API_KEY: process.env.DIMONA_API_KEY,
+      DIMONA_API_BASE_URL: process.env.DIMONA_API_BASE_URL,
+      RESEND_API_KEY: process.env.RESEND_API_KEY,
+      NOTIFY_EMAIL_TO: process.env.NOTIFY_EMAIL_TO,
+      EMAIL_FROM: process.env.EMAIL_FROM,
     }),
   );
 }

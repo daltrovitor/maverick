@@ -4,6 +4,8 @@ import { AdminHeader, Panel } from "@/components/admin/ui";
 import { Badge } from "@/components/ui/Badge";
 import { requireAdmin } from "@/lib/auth";
 import { serverEnv, siteUrl } from "@/lib/env";
+import { isDimonaConfigured } from "@/lib/dimona";
+import { isEmailConfigured } from "@/lib/email";
 import { isStripeConfigured } from "@/lib/stripe";
 
 export const metadata = { title: "Configurações" };
@@ -16,7 +18,7 @@ export default async function AdminSettings() {
 
   return (
     <div>
-      <AdminHeader title="Configurações" description="Dados da loja, Pix, cartão e políticas." />
+      <AdminHeader title="Configurações" description="Dados da loja, Pix, cartão, personalizados, Dimona e políticas." />
       <Panel title="Conexões" className="mb-6">
         <ul className="grid gap-2 text-sm">
           <li className="flex flex-wrap items-center gap-2">
@@ -25,8 +27,24 @@ export default async function AdminSettings() {
           </li>
           <li className="text-xs text-muted">
             Webhook do Stripe: <code className="rounded-xs bg-cream px-1">{`${siteUrl}/api/webhooks/stripe`}</code> com os eventos
+            payment_intent.succeeded, payment_intent.payment_failed e payment_intent.canceled (pedidos antigos também usam
             checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed e
-            checkout.session.expired.
+            checkout.session.expired).
+          </li>
+          <li className="flex flex-wrap items-center gap-2">
+            Dimona:{" "}
+            {isDimonaConfigured() ? <Badge tone="positive">Chave configurada</Badge> : <Badge tone="waiting">Defina DIMONA_API_KEY</Badge>}
+          </li>
+          <li className="text-xs text-muted">
+            Webhook da Dimona (enviado em cada pedido): <code className="rounded-xs bg-cream px-1">{`${siteUrl}/api/webhooks/dimona`}</code>
+          </li>
+          <li className="flex flex-wrap items-center gap-2">
+            Avisos por e-mail (Resend):{" "}
+            {isEmailConfigured() ? (
+              <Badge tone="positive">{`Enviando para ${env.NOTIFY_EMAIL_TO}`}</Badge>
+            ) : (
+              <Badge tone="waiting">Defina RESEND_API_KEY</Badge>
+            )}
           </li>
           <li className="flex flex-wrap items-center gap-2">
             Rotina de expiração (cron): {env.CRON_SECRET ? <Badge tone="positive">Protegida</Badge> : <Badge tone="waiting">Defina CRON_SECRET</Badge>}

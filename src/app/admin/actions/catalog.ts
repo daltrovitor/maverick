@@ -44,6 +44,9 @@ export async function saveProduct(input: unknown): Promise<AdminResult> {
         specs: p.specs,
         category_id: p.categoryId,
         status: p.status,
+        fulfillment: p.fulfillment,
+        dimona_designs: p.dimonaDesigns,
+        dimona_mocks: p.dimonaMocks,
         is_featured: p.isFeatured,
         position: p.position,
         seo_title: p.seoTitle ?? "",
@@ -58,6 +61,7 @@ export async function saveProduct(input: unknown): Promise<AdminResult> {
           stock: v.stock,
           is_active: v.isActive,
           position: i,
+          dimona_sku_id: v.dimonaSkuId,
         })),
         images: p.images.map((img, i) => ({
           storage_path: img.storagePath,

@@ -1,10 +1,12 @@
 // Hello World
 import "server-only";
+import { after } from "next/server";
 import QRCode from "qrcode";
-import { siteUrl } from "@/lib/env";
+import type Stripe from "stripe";
 import { buildPixPayload } from "@/lib/pix";
 import { getStripe } from "@/lib/stripe";
-import type { StoreSettingsRow } from "@/lib/database.types";
+import type { PaymentMethod, PixProvider, StoreSettingsRow } from "@/lib/database.types";
+import { afterOrderPaid } from "@/lib/order-fulfillment";
 import { getServiceDb } from "@/lib/supabase/server";
 
 export interface PixInstructions {
@@ -15,7 +17,17 @@ export interface PixInstructions {
   city: string;
 }
 
-/** Monta o "copia e cola" e o QR Code do Pix a partir das configurações da loja. */
+/** QR Code em SVG gerado no servidor (sem imagem externa) a partir do "copia e cola". */
+export function pixQrSvg(payload: string): Promise<string> {
+  return QRCode.toString(payload, {
+    type: "svg",
+    errorCorrectionLevel: "M",
+    margin: 1,
+    color: { dark: "#26170a", light: "#ffffff" },
+  });
+}
+
+/** Pix manual: monta o BR Code estático e o QR Code a partir das configurações da loja. */
 export async function pixInstructions(
   settings: StoreSettingsRow,
   order: { number: number; total_cents: number },
@@ -29,78 +41,182 @@ export async function pixInstructions(
     txid: `MAV${order.number}`,
     description: `Pedido ${order.number}`,
   });
-  const qrSvg = await QRCode.toString(payload, {
-    type: "svg",
-    errorCorrectionLevel: "M",
-    margin: 1,
-    color: { dark: "#26170a", light: "#ffffff" },
-  });
-  return { payload, qrSvg, key: settings.pix_key, holderName: settings.pix_holder_name, city: settings.pix_city };
+  return {
+    payload,
+    qrSvg: await pixQrSvg(payload),
+    key: settings.pix_key,
+    holderName: settings.pix_holder_name,
+    city: settings.pix_city,
+  };
 }
 
-interface CardOrder {
+/** Campos do pedido necessários para cobrar pelo Stripe (lidos com a service role). */
+export interface PaymentOrder {
   id: string;
   number: number;
-  public_token: string;
+  status: string;
+  payment_method: PaymentMethod;
+  pix_provider: PixProvider | null;
   total_cents: number;
+  customer_name: string;
   customer_email: string;
-  stripe_checkout_session_id: string | null;
+  customer_document: string | null;
+  stripe_payment_intent_id: string | null;
+  pix_qr_data: string | null;
+  pix_qr_expires_at: string | null;
+  expires_at: string | null;
+}
+
+const PAYMENT_ORDER_COLUMNS =
+  "id, number, status, payment_method, pix_provider, total_cents, customer_name, customer_email, customer_document, " +
+  "stripe_payment_intent_id, pix_qr_data, pix_qr_expires_at, expires_at";
+
+export async function loadPaymentOrder(by: { id: string } | { token: string }): Promise<PaymentOrder | null> {
+  const query = getServiceDb().from("orders").select(PAYMENT_ORDER_COLUMNS);
+  const { data, error } = await ("id" in by ? query.eq("id", by.id) : query.eq("public_token", by.token))
+    .maybeSingle<PaymentOrder>();
+  if (error) throw new Error(`loadPaymentOrder: ${error.message}`);
+  return data ?? null;
+}
+
+const metadataFor = (order: PaymentOrder) => ({ order_id: order.id, order_number: String(order.number) });
+
+type Outcome = "paid" | "failed" | "canceled";
+
+function outcomeForStatus(status: Stripe.PaymentIntent.Status): Outcome | null {
+  if (status === "succeeded") return "paid";
+  if (status === "canceled") return "canceled";
+  return null;
 }
 
 /**
- * Cria (ou reaproveita, se ainda aberta) a sessão do Stripe Checkout para um pedido com
- * cartão. Dados do cartão ficam 100% no Stripe; o banco guarda apenas o id da sessão.
+ * Aplica no banco o resultado de um PaymentIntent (webhook ou conferência direta pela
+ * página do pedido). A função do banco é idempotente; a venda é processada uma única
+ * vez (Dimona + aviso por e-mail) quando a transição para "pago" acontece.
  */
-export async function checkoutUrlForOrder(order: CardOrder, itemsSummary: string): Promise<string> {
+export async function applyPaymentIntentOutcome(
+  orderId: string,
+  paymentIntentId: string,
+  outcome: Outcome,
+  event: { id: string; type: string },
+): Promise<string> {
+  const { data, error } = await getServiceDb().rpc("process_payment_intent_event", {
+    p_event_id: event.id,
+    p_event_type: event.type,
+    p_order_id: orderId,
+    p_payment_intent_id: paymentIntentId,
+    p_outcome: outcome,
+  });
+  if (error) throw new Error(`process_payment_intent_event: ${error.message}`);
+  if (data === "paid") after(() => afterOrderPaid(orderId));
+  return data;
+}
+
+/** Confere o PaymentIntent no Stripe e aplica se já foi pago/cancelado (rede de segurança do webhook). */
+export async function syncPaymentIntent(order: PaymentOrder): Promise<Stripe.PaymentIntent | null> {
+  if (!order.stripe_payment_intent_id || order.status !== "awaiting_payment") return null;
+  const pi = await getStripe().paymentIntents.retrieve(order.stripe_payment_intent_id);
+  const outcome = outcomeForStatus(pi.status);
+  if (outcome) {
+    await applyPaymentIntentOutcome(order.id, pi.id, outcome, { id: `sync:${pi.id}:${pi.status}`, type: `sync.${pi.status}` });
+  }
+  return pi;
+}
+
+export type CardSession = { kind: "ready"; clientSecret: string } | { kind: "settled"; status: "paid" | "processing" };
+
+/**
+ * Cartão (crédito ou débito) pelo Payment Element: reaproveita o PaymentIntent aberto
+ * do pedido ou cria um novo. Os dados do cartão vão direto do navegador ao Stripe.
+ */
+export async function ensureCardSession(order: PaymentOrder): Promise<CardSession> {
+  if (order.payment_method !== "card" || order.status !== "awaiting_payment") throw new Error("pedido não aguarda cartão");
   const stripe = getStripe();
 
-  if (order.stripe_checkout_session_id) {
-    const existing = await stripe.checkout.sessions.retrieve(order.stripe_checkout_session_id);
-    if (existing.status === "open" && existing.url) return existing.url;
-    if (existing.status === "complete") return `${siteUrl}/pedido/${order.public_token}?pagamento=retorno`;
+  if (order.stripe_payment_intent_id) {
+    const pi = await syncPaymentIntent(order);
+    if (pi?.status === "succeeded") return { kind: "settled", status: "paid" };
+    if (pi?.status === "processing") return { kind: "settled", status: "processing" };
+    if (pi && pi.status !== "canceled" && pi.amount === order.total_cents && pi.client_secret) {
+      return { kind: "ready", clientSecret: pi.client_secret };
+    }
   }
 
-  const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60;
-  const session = await stripe.checkout.sessions.create(
+  const pi = await stripe.paymentIntents.create(
     {
-      mode: "payment",
+      amount: order.total_cents,
+      currency: "brl",
       payment_method_types: ["card"],
-      locale: "pt-BR",
-      customer_email: order.customer_email,
-      client_reference_id: order.id,
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: "brl",
-            unit_amount: order.total_cents,
-            product_data: {
-              name: `Pedido Maverick nº ${order.number}`,
-              description: itemsSummary.slice(0, 480) || undefined,
-            },
+      description: `Maverick Capshop · pedido ${order.number}`,
+      receipt_email: order.customer_email,
+      metadata: metadataFor(order),
+    },
+    // Clique duplo ou recarga simultânea devolvem o mesmo PaymentIntent.
+    { idempotencyKey: `card:${order.id}:${order.stripe_payment_intent_id ?? "initial"}` },
+  );
+  const { error } = await getServiceDb().rpc("attach_payment_intent", { p_order_id: order.id, p_payment_intent_id: pi.id });
+  if (error) throw new Error(`attach_payment_intent: ${error.message}`);
+  if (!pi.client_secret) throw new Error("Stripe não retornou o client_secret");
+  return { kind: "ready", clientSecret: pi.client_secret };
+}
+
+export interface StripePixCharge {
+  data: string;
+  expiresAt: string | null;
+}
+
+/**
+ * Pix pelo Stripe: cria e confirma no servidor um PaymentIntent Pix com o valor exato do
+ * pedido e devolve o "copia e cola" (o QR é desenhado pela loja). O pagamento é confirmado
+ * automaticamente pelo webhook payment_intent.succeeded.
+ */
+export async function ensureStripePix(order: PaymentOrder): Promise<StripePixCharge | null> {
+  if (order.payment_method !== "pix" || order.pix_provider !== "stripe" || order.status !== "awaiting_payment") return null;
+  if (order.pix_qr_data) return { data: order.pix_qr_data, expiresAt: order.pix_qr_expires_at };
+  const stripe = getStripe();
+
+  let pi: Stripe.PaymentIntent | null = null;
+  if (order.stripe_payment_intent_id) {
+    pi = await syncPaymentIntent(order);
+    if (pi?.status === "succeeded" || pi?.status === "canceled") return null;
+  }
+
+  if (!pi?.next_action?.pix_display_qr_code?.data) {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const orderDeadline = order.expires_at ? Math.floor(new Date(order.expires_at).getTime() / 1000) : nowSeconds + 86_400;
+    // Limites do Stripe: entre 10 s e 14 dias a partir de agora.
+    const expiresAt = Math.min(Math.max(orderDeadline, nowSeconds + 300), nowSeconds + 1_209_000);
+    pi = await stripe.paymentIntents.create(
+      {
+        amount: order.total_cents,
+        currency: "brl",
+        payment_method_types: ["pix"],
+        payment_method_data: {
+          type: "pix",
+          billing_details: {
+            name: order.customer_name,
+            email: order.customer_email,
+            ...(order.customer_document ? { tax_id: order.customer_document } : {}),
           },
         },
-      ],
-      metadata: { order_id: order.id, order_number: String(order.number) },
-      payment_intent_data: {
+        payment_method_options: { pix: { expires_at: expiresAt } },
+        confirm: true,
         description: `Maverick Capshop · pedido ${order.number}`,
-        metadata: { order_id: order.id, order_number: String(order.number) },
+        metadata: metadataFor(order),
       },
-      success_url: `${siteUrl}/pedido/${order.public_token}?pagamento=retorno`,
-      cancel_url: `${siteUrl}/pedido/${order.public_token}?pagamento=cancelado`,
-      expires_at: expiresAt,
-    },
-    // Reenvio da mesma requisição (clique duplo, rede instável) devolve a mesma sessão.
-    { idempotencyKey: `checkout:${order.id}:${order.stripe_checkout_session_id ?? "initial"}` },
-  );
+      { idempotencyKey: `pix:${order.id}:${order.stripe_payment_intent_id ?? "initial"}` },
+    );
+  }
 
-  if (!session.url) throw new Error("Stripe não retornou a URL do checkout");
-
-  const { error } = await getServiceDb().rpc("attach_stripe_session", {
+  const qr = pi.next_action?.pix_display_qr_code;
+  if (!qr?.data) throw new Error(`Stripe não retornou o QR Code do Pix (status ${pi.status})`);
+  const expiresAtIso = qr.expires_at ? new Date(qr.expires_at * 1000).toISOString() : null;
+  const { error } = await getServiceDb().rpc("attach_payment_intent", {
     p_order_id: order.id,
-    p_session_id: session.id,
-    p_session_expires_at: new Date(expiresAt * 1000).toISOString(),
+    p_payment_intent_id: pi.id,
+    p_pix_qr_data: qr.data,
+    p_pix_qr_expires_at: expiresAtIso,
   });
-  if (error) throw new Error(`attach_stripe_session: ${error.message}`);
-  return session.url;
+  if (error) throw new Error(`attach_payment_intent: ${error.message}`);
+  return { data: qr.data, expiresAt: expiresAtIso };
 }

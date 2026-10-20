@@ -4,7 +4,6 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
-import { resumeCardPayment } from "@/app/(site)/pedido/[token]/actions";
 import { Button } from "@/components/ui/Button";
 
 /** Atualiza a página periodicamente enquanto o pagamento não é confirmado. */
@@ -62,37 +61,5 @@ export function CopyButton({ value, label }: { readonly value: string; readonly 
       {copied ? <Check className="size-4" aria-hidden="true" /> : <Copy className="size-4" aria-hidden="true" />}
       <span aria-live="polite">{copied ? "Código copiado" : label}</span>
     </Button>
-  );
-}
-
-export function PayWithCardButton({ token }: { readonly token: string }) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <div>
-      <Button
-        size="lg"
-        className="w-full"
-        loading={pending}
-        onClick={async () => {
-          setPending(true);
-          setError(null);
-          const result = await resumeCardPayment(token);
-          if (result.ok) {
-            window.location.assign(result.url);
-          } else {
-            setPending(false);
-            setError(result.message);
-          }
-        }}
-      >
-        Pagar com cartão
-      </Button>
-      {error ? (
-        <p role="alert" className="mt-2 text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-    </div>
   );
 }

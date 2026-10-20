@@ -1,7 +1,7 @@
 // Hello World
 import { notFound } from "next/navigation";
 import { ProductEditor } from "@/components/admin/ProductEditor";
-import { variantToEditor, type EditorProduct } from "@/components/admin/product-editor-model";
+import { filesToEditor, variantToEditor, type EditorProduct } from "@/components/admin/product-editor-model";
 import { AdminHeader } from "@/components/admin/ui";
 import { requireAdmin } from "@/lib/auth";
 
@@ -22,6 +22,9 @@ export default async function AdminProductPage({ params }: { params: Promise<{ i
       description: "",
       categoryId: "",
       status: "draft",
+      fulfillment: "stock",
+      dimonaDesigns: filesToEditor(null),
+      dimonaMocks: filesToEditor(null),
       isFeatured: false,
       position: "0",
       seoTitle: "",
@@ -45,6 +48,7 @@ export default async function AdminProductPage({ params }: { params: Promise<{ i
     .eq("id", id)
     .maybeSingle();
   if (!product) notFound();
+  const { data: dimona } = await db.from("product_dimona").select("designs, mocks").eq("product_id", id).maybeSingle();
 
   const initial: EditorProduct = {
     id: product.id,
@@ -54,6 +58,9 @@ export default async function AdminProductPage({ params }: { params: Promise<{ i
     description: product.description,
     categoryId: product.category_id ?? "",
     status: product.status,
+    fulfillment: product.fulfillment ?? "stock",
+    dimonaDesigns: filesToEditor(dimona?.designs),
+    dimonaMocks: filesToEditor(dimona?.mocks),
     isFeatured: product.is_featured,
     position: String(product.position),
     seoTitle: product.seo_title ?? "",

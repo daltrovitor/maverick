@@ -5,7 +5,7 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { ufName } from "@/lib/br";
 import { errorCode, errorMessage } from "@/lib/errors";
-import { checkoutUrlForOrder } from "@/lib/payments";
+import { ensureStripePix, loadPaymentOrder } from "@/lib/payments";
 import { allowRequest } from "@/lib/rate-limit";
 import { isStripeConfigured } from "@/lib/stripe";
 import { getServiceDb, NotConfiguredError } from "@/lib/supabase/server";
@@ -103,7 +103,7 @@ const orderResponse = z.object({
   replayed: z.boolean(),
 });
 
-export type PlaceOrderResult = { ok: true; redirectTo: string; external: boolean } | ActionError;
+export type PlaceOrderResult = { ok: true; redirectTo: string } | ActionError;
 
 export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   const parsed = checkoutSchema.safeParse(input);
@@ -155,26 +155,18 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     const order = orderResponse.parse(created);
     const orderPath = `/pedido/${order.public_token}`;
 
-    if (order.payment_method === "pix") return { ok: true, redirectTo: orderPath, external: false };
-
-    // Cartão: sessão do Stripe. Se falhar, o pedido segue aguardando e pode ser pago pela página do pedido.
-    try {
-      const { data: full } = await db
-        .from("orders")
-        .select("id, number, public_token, total_cents, customer_email, stripe_checkout_session_id")
-        .eq("id", order.id)
-        .single();
-      const { data: items } = await db.from("order_items").select("product_name, variant_label, quantity").eq("order_id", order.id);
-      if (!full) throw new Error("pedido não encontrado após criação");
-      const summary = (items ?? [])
-        .map((i) => `${i.quantity}× ${i.product_name}${i.variant_label ? ` (${i.variant_label})` : ""}`)
-        .join(", ");
-      const url = await checkoutUrlForOrder(full, summary);
-      return { ok: true, redirectTo: url, external: true };
-    } catch (err) {
-      console.error("[checkout] stripe session", err);
-      return { ok: true, redirectTo: `${orderPath}?pagamento=indisponivel`, external: false };
+    // Pix pelo Stripe: o QR Code já sai pronto para a página do pedido. Se falhar aqui, a
+    // própria página tenta de novo (e cai no Pix manual, quando configurado).
+    if (order.payment_method === "pix" && isStripeConfigured()) {
+      try {
+        const payment = await loadPaymentOrder({ id: order.id });
+        if (payment?.pix_provider === "stripe") await ensureStripePix(payment);
+      } catch (err) {
+        console.error("[checkout] pix stripe", err);
+      }
     }
+    // Cartão: o formulário seguro do Stripe (Payment Element) abre na página do pedido.
+    return { ok: true, redirectTo: orderPath };
   } catch (err) {
     if (err instanceof NotConfiguredError) return fail("not_configured");
     console.error("[checkout] placeOrder", err);

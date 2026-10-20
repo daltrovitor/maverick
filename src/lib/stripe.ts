@@ -6,10 +6,17 @@ import { NotConfiguredError } from "@/lib/supabase/server";
 
 let client: Stripe | null = null;
 
-/** Secreta + webhook (confirmação) + publicável (Payment Element no navegador). */
+/**
+ * Chave secreta (servidor) + publicável (Payment Element). O webhook é opcional: sem ele, os
+ * pagamentos são confirmados consultando o Stripe (página do pedido, painel e rotina diária).
+ */
 export function isStripeConfigured(): boolean {
   const env = serverEnv();
-  return Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET && publicEnv.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY);
+  return Boolean(env.STRIPE_SECRET_KEY && publicEnv.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY);
+}
+
+export function isStripeWebhookConfigured(): boolean {
+  return Boolean(serverEnv().STRIPE_WEBHOOK_SECRET);
 }
 
 /** Cliente oficial do Stripe (somente servidor; a chave secreta nunca vai ao navegador). */

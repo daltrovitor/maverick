@@ -5,7 +5,8 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { ufName } from "@/lib/br";
 import { errorCode, errorMessage } from "@/lib/errors";
-import { ensureStripePix, loadPaymentOrder } from "@/lib/payments";
+import { after } from "next/server";
+import { ensureStripePix, loadPaymentOrder, reconcileStripePayments } from "@/lib/payments";
 import { allowRequest } from "@/lib/rate-limit";
 import { isStripeConfigured } from "@/lib/stripe";
 import { getServiceDb, NotConfiguredError } from "@/lib/supabase/server";
@@ -133,6 +134,8 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     // Devolve ao estoque reservas vencidas antes de reservar de novo (o cron diário é só a rede de segurança).
     const expired = await db.rpc("expire_stale_orders");
     if (expired.error) console.error("[checkout] expire_stale_orders", expired.error.message);
+    // Sem webhook do Stripe: cada compra também concilia, depois da resposta, as cobranças abertas.
+    after(() => reconcileStripePayments(20).catch((err: unknown) => console.error("[checkout] conciliação Stripe", err)));
 
     const { data: created, error } = await db.rpc("create_order", {
       p: {

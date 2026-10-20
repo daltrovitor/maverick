@@ -191,6 +191,32 @@ describe("Pix e cartão pelo PaymentIntent", () => {
     await t.as("authenticated", adminId, () => t.db.query("update public.store_settings set pix_provider = 'stripe'"));
   });
 
+  it("sem webhook: a expiração automática não toca pedidos com cobrança no Stripe", async () => {
+    const { variantId } = await saveProduct("expira-stripe", 2);
+    const order = await createOrder(variantId, "pix");
+    await service(`select public.attach_payment_intent($1, 'pi_venceu', 'DATA', null) as r`, [order.id]);
+    await t.db.query("update public.orders set expires_at = now() - interval '1 minute' where id = $1", [order.id]);
+
+    await service(`select public.expire_stale_orders() as r`);
+    expect((await orderRow(order.id)).status).toBe("awaiting_payment");
+
+    // O app confere/cancela no Stripe e só então expira, devolvendo o estoque.
+    expect(await service<boolean>(`select public.expire_order($1) as r`, [order.id])).toBe(true);
+    expect((await orderRow(order.id)).status).toBe("expired");
+    expect(await stockOf(variantId)).toBe(2);
+    expect(await service<boolean>(`select public.expire_order($1) as r`, [order.id])).toBe(false);
+    await expect(t.as("anon", null, () => t.call(`select public.expire_order($1) as r`, [order.id]))).rejects.toThrow(
+      /permission denied/,
+    );
+  });
+
+  it("expire_order não expira pedido ainda no prazo", async () => {
+    const { variantId } = await saveProduct("no-prazo", 2);
+    const order = await createOrder(variantId, "card");
+    expect(await service<boolean>(`select public.expire_order($1) as r`, [order.id])).toBe(false);
+    expect((await orderRow(order.id)).status).toBe("awaiting_payment");
+  });
+
   it("funções de pagamento não são públicas", async () => {
     await expect(
       t.as("anon", null, () => t.call(`select public.attach_payment_intent(gen_random_uuid(), 'pi_x') as r`)),

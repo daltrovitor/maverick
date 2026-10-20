@@ -459,6 +459,7 @@ export type Database = {
       quote_order: { Args: { p: Json }; Returns: Json };
       create_order: { Args: { p: Json; p_user_id?: string | null }; Returns: Json };
       expire_stale_orders: { Args: Record<string, never>; Returns: number };
+      expire_order: { Args: { p_order_id: string }; Returns: boolean };
       attach_stripe_session: {
         Args: { p_order_id: string; p_session_id: string; p_session_expires_at: string };
         Returns: undefined;

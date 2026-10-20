@@ -6,6 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { formatBRL } from "@/lib/br";
 import type { OrderStatus } from "@/lib/database.types";
 import { ORDER_STATUS, PAYMENT_METHOD } from "@/lib/order-status";
+import { reconcileStripePayments } from "@/lib/payments";
 import { getServiceDb } from "@/lib/supabase/server";
 
 export const metadata = { title: "Pedidos" };
@@ -29,7 +30,8 @@ export default async function AdminOrders({ searchParams }: Props) {
   const { db } = await requireAdmin();
   const { status = "todos", q = "" } = await searchParams;
 
-  // Libera reservas vencidas antes de listar (mesma rotina do cron).
+  // Confere pagamentos no Stripe e libera reservas vencidas antes de listar (mesma rotina do cron).
+  await reconcileStripePayments().catch((err: unknown) => console.error("[admin/pedidos] conciliação Stripe", err));
   const expired = await getServiceDb().rpc("expire_stale_orders");
   if (expired.error) console.error("[admin/pedidos] expire", expired.error.message);
 

@@ -44,13 +44,17 @@ https das artes (frente/costas/laterais). Produto Dimona publicado sem SKU ou se
 
 ## Colocando no ar
 
-1. **Banco**: rode a migration `supabase/migrations/20261020120000_custom_dimona_payments.sql` no Supabase
-   (SQL Editor ou `supabase db push`). Ela cria o bucket privado `custom-designs`.
+1. **Banco**: rode, em ordem, `supabase/migrations/20261020120000_custom_dimona_payments.sql` (cria o bucket
+   privado `custom-designs`) e `supabase/migrations/20261021120000_stripe_without_webhook.sql` no Supabase
+   (SQL Editor ou `supabase db push`).
 2. **Stripe**
    - Em *Settings → Payment methods*, ative **Cards** e **Pix** (Pix exige conta brasileira e liberação do Stripe).
-   - Em *Developers → Webhooks*, aponte para `https://<domínio>/api/webhooks/stripe` com os eventos
-     `payment_intent.succeeded`, `payment_intent.payment_failed` e `payment_intent.canceled`
-     (mantenha os `checkout.session.*` enquanto houver pedidos antigos em aberto).
+   - O webhook é **opcional**. Sem ele, a loja confirma consultando o Stripe: a página do pedido atualiza sozinha,
+     e a conciliação roda ao abrir *Pedidos* no painel, a cada nova compra e na rotina diária (cron). Pedidos com
+     cobrança no Stripe só expiram depois dessa conferência (migration 08), com a cobrança cancelada no Stripe.
+   - Se quiser confirmação instantânea mesmo com a página fechada, crie o webhook
+     `https://<domínio>/api/webhooks/stripe` com `payment_intent.succeeded`, `payment_intent.payment_failed` e
+     `payment_intent.canceled`, e salve o segredo em `STRIPE_WEBHOOK_SECRET`.
    - Enquanto o Pix não for liberado, escolha "Chave Pix da loja" em *Configurações → Pix*.
 3. **Dimona**: copie a chave da API da conta em camisadimona.com.br. O endereço do webhook vai em cada pedido
    automaticamente (`/api/webhooks/dimona`).
@@ -65,7 +69,7 @@ https das artes (frente/costas/laterais). Produto Dimona publicado sem SKU ou se
 | --- | --- | --- |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | sim (nova) | Payment Element no navegador (`pk_live_…`) |
 | `STRIPE_SECRET_KEY` | sim | PaymentIntents no servidor (`sk_live_…`) |
-| `STRIPE_WEBHOOK_SECRET` | sim | Assinatura do webhook (`whsec_…`) |
+| `STRIPE_WEBHOOK_SECRET` | não | Só se usar o webhook (`whsec_…`); sem ele, a loja consulta o Stripe |
 | `DIMONA_API_KEY` | sim (nova) | Criar/consultar pedidos e validar o webhook da Dimona |
 | `RESEND_API_KEY` | sim (nova) | E-mails de pedido personalizado e de venda paga (`re_…`) |
 | `NOTIFY_EMAIL_TO` | não | Destino dos avisos (padrão `viraweb.online@gmail.com`) |

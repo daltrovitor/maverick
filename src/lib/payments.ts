@@ -4,7 +4,7 @@ import { after } from "next/server";
 import QRCode from "qrcode";
 import type Stripe from "stripe";
 import { buildPixPayload } from "@/lib/pix";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, isStripeConfigured } from "@/lib/stripe";
 import type { PaymentMethod, PixProvider, StoreSettingsRow } from "@/lib/database.types";
 import { afterOrderPaid } from "@/lib/order-fulfillment";
 import { getServiceDb } from "@/lib/supabase/server";
@@ -108,7 +108,14 @@ export async function applyPaymentIntentOutcome(
     p_outcome: outcome,
   });
   if (error) throw new Error(`process_payment_intent_event: ${error.message}`);
-  if (data === "paid") after(() => afterOrderPaid(orderId));
+  if (data === "paid") {
+    try {
+      after(() => afterOrderPaid(orderId));
+    } catch {
+      // Fora do ciclo de uma requisição (ex.: dentro de outro after): executa agora.
+      await afterOrderPaid(orderId);
+    }
+  }
   return data;
 }
 
@@ -219,4 +226,52 @@ export async function ensureStripePix(order: PaymentOrder): Promise<StripePixCha
   });
   if (error) throw new Error(`attach_payment_intent: ${error.message}`);
   return { data: qr.data, expiresAt: expiresAtIso };
+}
+
+/**
+ * Conciliação sem webhook: confere no Stripe os pedidos que aguardam pagamento com cobrança
+ * aberta. Pagos viram "pago" (com Dimona e aviso por e-mail); vencidos têm a cobrança
+ * cancelada no Stripe ANTES de expirar, para que nenhum Pix pago seja expirado por engano.
+ */
+export async function reconcileStripePayments(limit = 50): Promise<{ checked: number; paid: number; expired: number }> {
+  const result = { checked: 0, paid: 0, expired: 0 };
+  if (!isStripeConfigured()) return result;
+  const db = getServiceDb();
+  const { data: orders, error } = await db
+    .from("orders")
+    .select(PAYMENT_ORDER_COLUMNS)
+    .eq("status", "awaiting_payment")
+    .not("stripe_payment_intent_id", "is", null)
+    .order("expires_at", { ascending: true })
+    .limit(limit)
+    .returns<PaymentOrder[]>();
+  if (error) throw new Error(`reconcileStripePayments: ${error.message}`);
+  const stripe = getStripe();
+
+  for (const order of orders ?? []) {
+    if (!order.stripe_payment_intent_id) continue;
+    result.checked++;
+    try {
+      let pi = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+      const overdue = order.expires_at !== null && new Date(order.expires_at).getTime() <= Date.now();
+      if (overdue && pi.status !== "succeeded" && pi.status !== "canceled" && pi.status !== "processing") {
+        // Cancelar falha se o pagamento entrou neste instante: nesse caso vale o status atual.
+        pi = await stripe.paymentIntents.cancel(pi.id).catch(() => stripe.paymentIntents.retrieve(pi.id));
+      }
+      if (pi.status === "succeeded") {
+        await applyPaymentIntentOutcome(order.id, pi.id, "paid", { id: `sync:${pi.id}:succeeded`, type: "sync.succeeded" });
+        result.paid++;
+      } else if (pi.status === "canceled") {
+        if (overdue) {
+          const { data: expired } = await db.rpc("expire_order", { p_order_id: order.id });
+          if (expired) result.expired++;
+        } else {
+          await applyPaymentIntentOutcome(order.id, pi.id, "canceled", { id: `sync:${pi.id}:canceled`, type: "sync.canceled" });
+        }
+      }
+    } catch (err) {
+      console.error("[stripe] conciliação do pedido", order.number, err);
+    }
+  }
+  return result;
 }

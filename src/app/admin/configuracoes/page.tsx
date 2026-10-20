@@ -6,7 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { serverEnv, siteUrl } from "@/lib/env";
 import { isDimonaConfigured } from "@/lib/dimona";
 import { isEmailConfigured } from "@/lib/email";
-import { isStripeConfigured } from "@/lib/stripe";
+import { isStripeConfigured, isStripeWebhookConfigured } from "@/lib/stripe";
 
 export const metadata = { title: "Configurações" };
 
@@ -25,11 +25,19 @@ export default async function AdminSettings() {
             Stripe:{" "}
             {isStripeConfigured() ? <Badge tone="positive">{`Conectado (${stripeMode})`}</Badge> : <Badge tone="negative">Não configurado</Badge>}
           </li>
+          <li className="flex flex-wrap items-center gap-2">
+            Webhook do Stripe (opcional):{" "}
+            {isStripeWebhookConfigured() ? (
+              <Badge tone="positive">Ativo</Badge>
+            ) : (
+              <Badge tone="neutral">Desligado: pagamentos conferidos direto no Stripe</Badge>
+            )}
+          </li>
           <li className="text-xs text-muted">
-            Webhook do Stripe: <code className="rounded-xs bg-cream px-1">{`${siteUrl}/api/webhooks/stripe`}</code> com os eventos
-            payment_intent.succeeded, payment_intent.payment_failed e payment_intent.canceled (pedidos antigos também usam
-            checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed e
-            checkout.session.expired).
+            Sem webhook, a confirmação acontece na página do pedido (atualiza sozinha), ao abrir Pedidos no painel, a cada
+            compra nova e na rotina diária. Para confirmar mesmo com a página fechada, opcionalmente crie o webhook{" "}
+            <code className="rounded-xs bg-cream px-1">{`${siteUrl}/api/webhooks/stripe`}</code> com payment_intent.succeeded,
+            payment_intent.payment_failed e payment_intent.canceled.
           </li>
           <li className="flex flex-wrap items-center gap-2">
             Dimona:{" "}

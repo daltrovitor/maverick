@@ -86,7 +86,7 @@ export default async function AdminOrderDetail({ params }: { params: Promise<{ i
             </ul>
             <dl className="mt-4 grid gap-1 border-t border-line pt-3 text-sm">
               <div className="flex justify-between"><dt className="text-muted">Subtotal</dt><dd className="tabular">{formatBRL(order.subtotal_cents)}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted">Frete ({order.shipping_uf})</dt><dd className="tabular">{formatBRL(order.shipping_cents)}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted">Frete ({order.shipping_uf})</dt><dd className="tabular">{order.shipping_cents === 0 ? "Grátis (embutido no preço)" : formatBRL(order.shipping_cents)}</dd></div>
               {order.discount_cents > 0 ? (
                 <div className="flex justify-between text-success"><dt>Desconto {order.coupon_code}</dt><dd className="tabular">− {formatBRL(order.discount_cents)}</dd></div>
               ) : null}

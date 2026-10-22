@@ -7,7 +7,7 @@ import { useRef } from "react";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
-import { formatBRL } from "@/lib/br";
+import { StorePrice } from "@/components/delivery/StorePrice";
 import { RollLink } from "@/components/ui/RollLink";
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
@@ -92,7 +92,9 @@ export function ProductLineup({ items, instagramUrl }: { readonly items: LineupI
                   </div>
                   <div className="mt-4 flex items-baseline justify-between gap-3">
                     <h3 className="truncate text-[0.95rem]">{item.name}</h3>
-                    <p className="tabular shrink-0 text-sm text-cream/80">{formatBRL(item.priceCents)}</p>
+                    <p className="tabular shrink-0 text-sm text-cream/80">
+                      <StorePrice baseCents={item.priceCents} />
+                    </p>
                   </div>
                 </Link>
               </li>

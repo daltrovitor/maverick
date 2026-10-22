@@ -2,9 +2,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ProductDeliveryInfo } from "@/components/delivery/ProductDeliveryInfo";
 import { ProductPurchase } from "@/components/store/ProductPurchase";
-import { getProductBySlug, listShippingRates } from "@/lib/catalog";
-import { formatBRL, ufName } from "@/lib/br";
+import { getProductBySlug, getShippingPricing } from "@/lib/catalog";
 import { siteUrl } from "@/lib/env";
 
 export const revalidate = 60;
@@ -38,8 +38,11 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 
 export default async function ProductPage({ params }: Params) {
   const { slug } = await params;
-  const [product, rates] = await Promise.all([getProductBySlug(slug), listShippingRates()]);
+  const [product, pricing] = await Promise.all([getProductBySlug(slug), getShippingPricing()]);
   if (!product) notFound();
+  // Frete embutido: o menor preço possível (UF mais barata) é o que a vitrine mostra sem CEP.
+  const shippingFloor =
+    pricing.inPrice && pricing.rates.length > 0 ? Math.min(...pricing.rates.map((r) => r.cents)) : 0;
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -53,13 +56,11 @@ export default async function ProductPage({ params }: Params) {
       "@type": "Offer",
       url: `${siteUrl}/produto/${product.slug}`,
       priceCurrency: "BRL",
-      price: (v.price_cents / 100).toFixed(2),
+      price: ((v.price_cents + shippingFloor) / 100).toFixed(2),
       availability: v.stock > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
       itemCondition: "https://schema.org/NewCondition",
     })),
   };
-
-  const cheapestShipping = rates.length > 0 ? Math.min(...rates.map((r) => r.price_cents)) : null;
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 pt-6 pb-24 sm:px-8 sm:pt-10">
@@ -124,20 +125,7 @@ export default async function ProductPage({ params }: Params) {
             <h2 id="entrega" className="type-micro text-ink-soft">
               Entrega
             </h2>
-            {rates.length === 0 ? (
-              <p className="mt-4 text-sm text-ink-soft">As regiões de entrega serão informadas no checkout.</p>
-            ) : (
-              <p className="mt-4 text-sm leading-relaxed text-ink-soft">
-                Entregamos em {rates.length === 27 ? "todo o Brasil" : `${rates.length} estados`}
-                {cheapestShipping !== null ? `, com frete a partir de ${formatBRL(cheapestShipping)}` : ""}. O valor
-                exato aparece no checkout pelo estado do endereço.
-                {rates.length < 27 ? (
-                  <span className="mt-2 block text-xs text-muted">
-                    Atendidos: {rates.map((r) => ufName(r.uf)).join(", ")}.
-                  </span>
-                ) : null}
-              </p>
-            )}
+            <ProductDeliveryInfo />
           </section>
         </div>
       </div>

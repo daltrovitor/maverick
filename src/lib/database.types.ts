@@ -151,6 +151,8 @@ export type StoreSettingsRow = {
   custom_max_discount_bps: number;
   dimona_auto_forward: boolean;
   dimona_shipping_speed: DimonaShippingSpeed;
+  /** Frete da UF somado ao preço de cada unidade (migração 20261022120000; ausente antes dela). */
+  shipping_in_price?: boolean;
   updated_at: string;
   updated_by: string | null;
 };

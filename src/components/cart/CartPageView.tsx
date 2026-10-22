@@ -4,10 +4,16 @@
 import { formatBRL } from "@/lib/br";
 import { ButtonLink } from "@/components/ui/Button";
 import { useCart } from "@/components/cart/CartProvider";
+import { useDelivery } from "@/components/delivery/DeliveryProvider";
+import { FreeShippingNote, useRegionalPrice } from "@/components/delivery/StorePrice";
 import { CartLines } from "@/components/cart/CartLines";
 
 export function CartPageView() {
-  const { lines, subtotalCents, ready, refreshing, notice } = useCart();
+  const { lines, ready, refreshing, notice } = useCart();
+  const { pricing } = useDelivery();
+  const regional = useRegionalPrice();
+  const shippingInPrice = pricing.inPrice && pricing.rates.length > 0;
+  const regionalSubtotal = lines.reduce((sum, l) => sum + regional(l.unitPriceCents) * l.quantity, 0);
 
   if (!ready || (refreshing && lines.length === 0)) {
     return <p className="mt-10 text-ink-soft" role="status">Carregando sua sacola…</p>;
@@ -40,9 +46,13 @@ export function CartPageView() {
         <div className="rounded-xs border border-line bg-cream p-6 lg:sticky lg:top-28">
           <div className="flex items-baseline justify-between">
             <span className="text-ink-soft">Subtotal</span>
-            <span className="tabular text-xl font-semibold">{formatBRL(subtotalCents)}</span>
+            <span className="tabular text-xl font-semibold">{formatBRL(regionalSubtotal)}</span>
           </div>
-          <p className="mt-2 text-sm text-muted">O frete é calculado pelo estado do endereço no checkout.</p>
+          {shippingInPrice ? (
+            <FreeShippingNote className="mt-2 text-sm text-muted" />
+          ) : (
+            <p className="mt-2 text-sm text-muted">O frete é calculado pelo estado do endereço no checkout.</p>
+          )}
           <ButtonLink href="/checkout" size="lg" className="mt-6 w-full">
             Finalizar compra
           </ButtonLink>

@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { MaverickLogo } from "@/components/brand/MaverickLogo";
 import { useCart } from "@/components/cart/CartProvider";
+import { DeliveryButton } from "@/components/delivery/StorePrice";
 
 const NAV = [
   { href: "/loja", label: "Coleção" },
@@ -79,6 +80,7 @@ export function SiteHeader({ overDark = false }: { readonly overDark?: boolean }
         </nav>
 
         <div className="flex items-center gap-1">
+          <DeliveryButton />
           <button
             type="button"
             onClick={open}

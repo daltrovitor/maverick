@@ -3,14 +3,14 @@ import type { ReactNode } from "react";
 import { SiteFooter } from "@/components/layout/SiteFooter";
 import { SiteHeader } from "@/components/layout/SiteHeader";
 import { SiteProviders } from "@/components/providers/SiteProviders";
-import { getStoreSettings } from "@/lib/catalog";
+import { getShippingPricing, getStoreSettings } from "@/lib/catalog";
 
 export const revalidate = 300;
 
 export default async function SiteLayout({ children }: { readonly children: ReactNode }) {
-  const settings = await getStoreSettings();
+  const [settings, pricing] = await Promise.all([getStoreSettings(), getShippingPricing()]);
   return (
-    <SiteProviders>
+    <SiteProviders pricing={pricing}>
       <a
         href="#conteudo"
         className="sr-only-focusable fixed top-2 left-2 z-50 rounded-sm bg-ink px-4 py-3 text-sm text-paper"

@@ -168,7 +168,7 @@ export function ImageUploader({
       >
         <ImagePlus className="size-5" aria-hidden="true" />
         {uploading > 0 ? `Enviando ${uploading} foto(s)…` : "Adicionar fotos oficiais (JPG, PNG, WebP · até 12)"}
-        <span className="text-xs text-muted">A primeira foto é a principal. Convertidas para WebP até 2000px.</span>
+        <span className="text-xs text-muted">A primeira foto (de cada cor) é a principal e pinta o boné 3D: use uma foto de frente. Convertidas para WebP até 2000px.</span>
       </label>
       <p className="mt-2 text-xs text-muted">
         Fotos removidas daqui são apagadas do armazenamento ao salvar o produto.

@@ -6,6 +6,8 @@ import { X } from "lucide-react";
 import { formatBRL } from "@/lib/br";
 import { ButtonLink } from "@/components/ui/Button";
 import { useCart } from "@/components/cart/CartProvider";
+import { useDelivery } from "@/components/delivery/DeliveryProvider";
+import { FreeShippingNote, useRegionalPrice } from "@/components/delivery/StorePrice";
 import { CartLines } from "@/components/cart/CartLines";
 
 /**
@@ -13,7 +15,11 @@ import { CartLines } from "@/components/cart/CartLines";
  * sem bibliotecas extras.
  */
 export function CartDrawer() {
-  const { isOpen, close, lines, subtotalCents, notice, refreshing, refresh } = useCart();
+  const { isOpen, close, lines, notice, refreshing, refresh } = useCart();
+  const { pricing } = useDelivery();
+  const regional = useRegionalPrice();
+  const shippingInPrice = pricing.inPrice && pricing.rates.length > 0;
+  const regionalSubtotal = lines.reduce((sum, l) => sum + regional(l.unitPriceCents) * l.quantity, 0);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -75,9 +81,13 @@ export function CartDrawer() {
           <footer className="border-t border-line px-5 pt-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
             <div className="flex items-baseline justify-between">
               <span className="text-sm text-ink-soft">Subtotal</span>
-              <span className="tabular text-lg font-semibold">{formatBRL(subtotalCents)}</span>
+              <span className="tabular text-lg font-semibold">{formatBRL(regionalSubtotal)}</span>
             </div>
-            <p className="mt-1 text-xs text-muted">Frete e cupom são calculados no checkout.</p>
+            {shippingInPrice ? (
+              <FreeShippingNote className="mt-1 text-xs text-muted" />
+            ) : (
+              <p className="mt-1 text-xs text-muted">Frete e cupom são calculados no checkout.</p>
+            )}
             <div className="mt-4 grid gap-2">
               <ButtonLink href="/checkout" onClick={close} size="lg">
                 Finalizar compra

@@ -1,10 +1,10 @@
 // Hello World
 import Image from "next/image";
 import Link from "next/link";
-import { formatBRL } from "@/lib/br";
 import type { CatalogProduct } from "@/lib/catalog";
+import { StorePrice } from "@/components/delivery/StorePrice";
 
-/** Cartão de produto: foto real sobre creme, nome, preço e disponibilidade. */
+/** Cartão de produto: foto real sobre creme, nome, preço (com o frete da região) e disponibilidade. */
 export function ProductCard({ product, priority = false }: { readonly product: CatalogProduct; readonly priority?: boolean }) {
   const [first, second] = product.images;
   const soldOut = product.totalStock <= 0;
@@ -56,13 +56,13 @@ export function ProductCard({ product, priority = false }: { readonly product: C
             ) : null}
           </div>
           <p className="tabular shrink-0 text-right text-[0.95rem]">
-            {product.compareAtCents && !priceRange ? (
-              <span className="mr-2 text-sm text-muted line-through">{formatBRL(product.compareAtCents)}</span>
-            ) : null}
-            <span className="font-medium">
-              {priceRange ? "a partir de " : ""}
-              {formatBRL(product.minPriceCents)}
-            </span>
+            <StorePrice
+              baseCents={product.minPriceCents}
+              compareAtCents={product.compareAtCents}
+              range={priceRange}
+              className="font-medium"
+              compareClassName="mr-2 text-sm text-muted line-through"
+            />
           </p>
         </div>
       </Link>

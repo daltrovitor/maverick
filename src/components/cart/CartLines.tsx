@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Minus, Plus } from "lucide-react";
 import { formatBRL } from "@/lib/br";
 import { useCart, type CartLine } from "@/components/cart/CartProvider";
+import { useRegionalPrice } from "@/components/delivery/StorePrice";
 
 function QuantityStepper({ line }: { readonly line: CartLine }) {
   const { setQuantity } = useCart();
@@ -38,6 +39,7 @@ function QuantityStepper({ line }: { readonly line: CartLine }) {
 
 export function CartLines({ onNavigate }: { readonly onNavigate?: () => void }) {
   const { lines, remove } = useCart();
+  const regional = useRegionalPrice();
   return (
     <ul className="divide-y divide-line">
       {lines.map((line) => (
@@ -59,7 +61,7 @@ export function CartLines({ onNavigate }: { readonly onNavigate?: () => void }) 
                 </Link>
                 {line.variantLabel ? <p className="mt-0.5 text-sm text-muted">{line.variantLabel}</p> : null}
               </div>
-              <p className="tabular shrink-0 text-sm font-medium">{formatBRL(line.unitPriceCents * line.quantity)}</p>
+              <p className="tabular shrink-0 text-sm font-medium">{formatBRL(regional(line.unitPriceCents) * line.quantity)}</p>
             </div>
             <div className="mt-auto flex items-center justify-between gap-3 pt-3">
               <QuantityStepper line={line} />

@@ -15,12 +15,14 @@ import {
   type FormEvent,
 } from "react";
 import { CreditCard, QrCode } from "lucide-react";
-import { formatBRL, formatCep, formatCpf, onlyDigits, UFS } from "@/lib/br";
+import { formatBRL, formatCep, formatCpf, isUf, onlyDigits, UFS } from "@/lib/br";
 import { placeOrder, quoteCheckout, type QuoteResult } from "@/app/(site)/checkout/actions";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { SelectField, TextAreaField, TextField } from "@/components/ui/Field";
 import { useCart } from "@/components/cart/CartProvider";
 import { clearStoredCoupon, readStoredCoupon } from "@/components/cart/CouponCapture";
+import { useDelivery } from "@/components/delivery/DeliveryProvider";
+import { useRegionalPrice } from "@/components/delivery/StorePrice";
 
 interface Props {
   readonly pixAvailable: boolean;
@@ -53,7 +55,10 @@ interface FormState {
 
 export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHours, prefill }: Props) {
   const router = useRouter();
-  const { lines, ready, subtotalCents, clear, notice } = useCart();
+  const { lines, ready, clear, notice } = useCart();
+  const { pricing, delivery, hydrated, setDelivery } = useDelivery();
+  const regional = useRegionalPrice();
+  const shippingInPrice = pricing.inPrice && pricing.rates.length > 0;
   const [form, setForm] = useState<FormState>({
     name: prefill.name,
     email: prefill.email,
@@ -84,6 +89,7 @@ export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHou
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const numberRef = useRef<HTMLInputElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  const prefilledCep = useRef(false);
 
   const items = useMemo(() => lines.map((l) => ({ variantId: l.variantId, quantity: l.quantity })), [lines]);
 
@@ -96,7 +102,7 @@ export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHou
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((f) => ({ ...f, [key]: value }));
 
   // Autopreenchimento pelo CEP (ViaCEP).
-  const lookupCep = useCallback(async (raw: string) => {
+  const lookupCep = useCallback(async (raw: string, focusNumber = true) => {
     const cep = onlyDigits(raw);
     if (cep.length !== 8) return;
     setCepStatus("loading");
@@ -115,12 +121,25 @@ export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHou
         uf: data.uf || f.uf,
       }));
       setCepStatus("found");
-      numberRef.current?.focus();
+      // O CEP do checkout passa a ser o destino da loja inteira (preços com o frete da região).
+      if (data.uf && isUf(data.uf)) setDelivery({ cep, uf: data.uf, city: data.localidade ?? null });
+      if (focusNumber) numberRef.current?.focus();
     } catch {
       // Sem ViaCEP: o cliente preenche manualmente; o servidor confere de novo.
       setCepStatus("idle");
     }
-  }, []);
+  }, [setDelivery]);
+
+  // CEP já informado na loja: preenche o endereço sozinho (uma vez, depois de hidratar).
+  useEffect(() => {
+    if (!hydrated || prefilledCep.current || !delivery) return;
+    const timer = window.setTimeout(() => {
+      prefilledCep.current = true;
+      setForm((f) => (f.cep ? f : { ...f, cep: formatCep(delivery.cep) }));
+      void lookupCep(delivery.cep, false);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, delivery, lookupCep]);
 
   // Recalcula frete/desconto/total no servidor sempre que sacola, UF ou cupom mudam.
   useEffect(() => {
@@ -212,6 +231,7 @@ export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHou
 
   const fieldError = (name: string) => (formError?.field === name ? formError.message : null);
   const shipping = quote?.shippingCents;
+  const localSubtotal = lines.reduce((sum, l) => sum + regional(l.unitPriceCents, form.uf || null) * l.quantity, 0);
   const total = quote?.totalCents;
 
   return (
@@ -343,7 +363,7 @@ export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHou
                     {l.quantity}× {l.variantLabel ?? ""}
                   </p>
                 </div>
-                <p className="tabular text-sm">{formatBRL(l.unitPriceCents * l.quantity)}</p>
+                <p className="tabular text-sm">{formatBRL(regional(l.unitPriceCents, form.uf || null) * l.quantity)}</p>
               </li>
             ))}
           </ul>
@@ -381,14 +401,25 @@ export function CheckoutForm({ pixAvailable, pixAutomatic, cardAvailable, pixHou
           <dl className="mt-6 grid gap-2 text-sm">
             <div className="flex justify-between">
               <dt className="text-ink-soft">Subtotal</dt>
-              <dd className="tabular">{formatBRL(quote?.subtotalCents ?? subtotalCents)}</dd>
+              <dd className="tabular">{formatBRL(quote?.subtotalCents ?? localSubtotal)}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-soft">Frete</dt>
               <dd className="tabular">
-                {!form.uf ? "Informe o CEP" : quoting ? "Calculando…" : shipping === undefined ? "—" : shipping === 0 ? "Grátis" : formatBRL(shipping)}
+                {shippingInPrice && !quoteError
+                  ? "Grátis"
+                  : !form.uf
+                    ? "Informe o CEP"
+                    : quoting
+                      ? "Calculando…"
+                      : shipping === undefined
+                        ? "—"
+                        : shipping === 0
+                          ? "Grátis"
+                          : formatBRL(shipping)}
               </dd>
             </div>
+            {shippingInPrice ? <p className="text-right text-xs text-muted">O envio já está incluso no preço dos produtos.</p> : null}
             {quote?.shippingEstimate ? (
               <p className="text-right text-xs text-muted">Prazo estimado: {quote.shippingEstimate}</p>
             ) : null}

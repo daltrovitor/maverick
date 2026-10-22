@@ -2,6 +2,7 @@
 import "server-only";
 import { cache } from "react";
 import type { CategoryRow, ProductSpec, ShippingRateRow, StoreSettingsRow, VariantRow } from "@/lib/database.types";
+import type { ShippingPricing } from "@/lib/shipping-pricing";
 import { productImageUrl } from "@/lib/storage";
 import { getPublicDb } from "@/lib/supabase/server";
 
@@ -160,4 +161,14 @@ export const listShippingRates = cache(async (): Promise<ShippingRateRow[]> => {
   if (!db) return [];
   const { data } = await db.from("shipping_rates").select("*").eq("is_active", true).order("uf");
   return data ?? [];
+});
+
+/** Regra de vitrine do frete: UFs atendidas e se o frete entra no preço (chave do painel). */
+export const getShippingPricing = cache(async (): Promise<ShippingPricing> => {
+  const [settings, rates] = await Promise.all([getStoreSettings(), listShippingRates()]);
+  return {
+    // Antes da migração a coluna não existe: segue o frete cobrado à parte.
+    inPrice: settings?.shipping_in_price === true,
+    rates: rates.map((r) => ({ uf: r.uf, cents: r.price_cents, estimate: r.delivery_estimate })),
+  };
 });

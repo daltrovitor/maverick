@@ -45,7 +45,8 @@ https das artes (frente/costas/laterais). Produto Dimona publicado sem SKU ou se
 ## Colocando no ar
 
 1. **Banco**: rode, em ordem, `supabase/migrations/20261020120000_custom_dimona_payments.sql` (cria o bucket
-   privado `custom-designs`) e `supabase/migrations/20261021120000_stripe_without_webhook.sql` no Supabase
+   privado `custom-designs`), `supabase/migrations/20261021120000_stripe_without_webhook.sql` e
+   `supabase/migrations/20261022120000_shipping_in_price.sql` (frete embutido no preço) no Supabase
    (SQL Editor ou `supabase db push`).
 2. **Stripe**
    - Em *Settings → Payment methods*, ative **Cards** e **Pix** (Pix exige conta brasileira e liberação do Stripe).
@@ -76,3 +77,21 @@ https das artes (frente/costas/laterais). Produto Dimona publicado sem SKU ou se
 | `EMAIL_FROM` | não | Remetente (padrão `Maverick Capshop <onboarding@resend.dev>`) |
 | `DIMONA_API_BASE_URL` | não | Padrão `https://admin.camisadimona.com.br` |
 | `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `IP_HASH_SALT`, `CRON_SECRET` | sim (já existentes) | Base da loja |
+
+## Frete embutido no preço e CEP salvo
+
+- Com a migração `20261022120000_shipping_in_price.sql`, o valor de cada estado (*Painel → Frete*) é somado ao preço
+  de **cada boné** e o pedido sai com frete grátis. A chave "Frete embutido no preço" na mesma página volta ao frete
+  cobrado à parte, uma vez por pedido. Sem a migração, a loja segue no modelo antigo.
+- O cliente informa o CEP uma vez (painel no canto na primeira visita, ou o botão de CEP do cabeçalho); ele fica
+  guardado no navegador e todos os preços (vitrine, produto, sacola e checkout) passam a mostrar o valor da região.
+  Sem CEP, a vitrine mostra "a partir de" com o estado mais barato. O valor cobrado é sempre recalculado no banco.
+- Cupons percentuais valem sobre o preço exibido (produto + frete da região).
+
+## Boné 3D das páginas de produto
+
+- O botão "Ver em 3D" da galeria monta o boné com o modelo neutro `public/models/cap-blank/cap.glb`
+  (`python -I scripts/build-polo-model.py --blank`) pintado a partir da **primeira foto da cor escolhida**: a cor da
+  copa e da aba e o logo da frente são lidos da foto no navegador (`src/components/cap/productCapLook.ts`).
+- Para um bom resultado, cadastre como primeira foto de cada cor uma foto **de frente**, com fundo liso (branco, creme
+  ou cinza) ou recortada (PNG transparente).

@@ -134,27 +134,51 @@ describe("catálogo e RLS", () => {
 });
 
 describe("pedido", () => {
-  it("calcula pelo banco, congela o frete e reserva o estoque", async () => {
+  it("embute o frete da UF em cada unidade, congela os valores e reserva o estoque", async () => {
     const { variantId } = await saveProduct("calculo", 4, 12990);
     const payload = orderPayload(variantId, 2);
     // Preço adulterado no payload é ignorado: só variant_id e quantidade importam.
     (payload.items[0] as Record<string, unknown>).price_cents = 1;
-    const order = await createOrder(payload, customerId);
 
-    expect(order.total_cents).toBe(2 * 12990 + 1990);
+    const quote = await t.as("service_role", null, () =>
+      t.call<Record<string, number>>(`select public.quote_order($1::jsonb) as r`, [
+        JSON.stringify({ items: payload.items, uf: "GO" }),
+      ]),
+    );
+    expect(quote).toMatchObject({ subtotal_cents: 2 * (12990 + 1990), shipping_cents: 0, shipping_included_cents: 2 * 1990 });
+
+    const order = await createOrder(payload, customerId);
+    expect(order.total_cents).toBe(2 * (12990 + 1990));
     expect(await stockOf(variantId)).toBe(2);
 
-    const row = await t.db.query<{ shipping_cents: number; shipping_uf: string; status: string }>(
-      "select shipping_cents, shipping_uf, status from public.orders where id = $1",
+    const row = await t.db.query<{ shipping_cents: number; subtotal_cents: number; shipping_uf: string; status: string }>(
+      "select shipping_cents, subtotal_cents, shipping_uf, status from public.orders where id = $1",
       [order.id],
     );
-    expect(row.rows[0]).toEqual({ shipping_cents: 1990, shipping_uf: "GO", status: "awaiting_payment" });
+    expect(row.rows[0]).toEqual({ shipping_cents: 0, subtotal_cents: 2 * 14980, shipping_uf: "GO", status: "awaiting_payment" });
+    const item = await t.db.query<{ unit_price_cents: number }>("select unit_price_cents from public.order_items where order_id = $1", [
+      order.id,
+    ]);
+    expect(item.rows[0]!.unit_price_cents).toBe(14980);
 
     // Alterar o frete depois não muda o pedido.
     await t.as("authenticated", adminId, () => t.db.query("update public.shipping_rates set price_cents = 5000 where uf = 'GO'"));
-    const after = await t.db.query<{ shipping_cents: number }>("select shipping_cents from public.orders where id = $1", [order.id]);
-    expect(after.rows[0]!.shipping_cents).toBe(1990);
+    const after = await t.db.query<{ total_cents: number }>("select total_cents from public.orders where id = $1", [order.id]);
+    expect(after.rows[0]!.total_cents).toBe(2 * 14980);
     await t.as("authenticated", adminId, () => t.db.query("update public.shipping_rates set price_cents = 1990 where uf = 'GO'"));
+  });
+
+  it("com o frete fora do preço, cobra a UF uma vez por pedido", async () => {
+    const { variantId } = await saveProduct("frete-separado", 4, 12990);
+    await t.as("authenticated", adminId, () => t.db.query("update public.store_settings set shipping_in_price = false"));
+    try {
+      const order = await createOrder(orderPayload(variantId, 2), customerId);
+      expect(order.total_cents).toBe(2 * 12990 + 1990);
+      const row = await t.db.query<{ shipping_cents: number }>("select shipping_cents from public.orders where id = $1", [order.id]);
+      expect(row.rows[0]!.shipping_cents).toBe(1990);
+    } finally {
+      await t.as("authenticated", adminId, () => t.db.query("update public.store_settings set shipping_in_price = true"));
+    }
   });
 
   it("bloqueia UF sem frete configurado e estoque insuficiente", async () => {
@@ -359,14 +383,15 @@ describe("afiliados", () => {
 
     const { variantId } = await saveProduct("afiliado", 5, 10000);
     const order = await createOrder(orderPayload(variantId, 1, { coupon_code: approved.code.toLowerCase() }));
-    expect(order.total_cents).toBe(10000 - 2500 + 1990);
+    // Frete embutido: os 25% valem sobre o preço exibido (produto + frete da UF).
+    expect(order.total_cents).toBe(10000 + 1990 - Math.floor((10000 + 1990) * 0.25));
     await expect(createOrder(orderPayload(variantId, 1, { coupon_code: approved.code }))).rejects.toThrow(
       /coupon_customer_limit/,
     );
     // Outro cliente pode usar o mesmo código dentro das 24h.
     const otherCustomer = orderPayload(variantId, 1, { coupon_code: approved.code });
     otherCustomer.customer.email = "amigo@example.com";
-    await expect(createOrder(otherCustomer)).resolves.toMatchObject({ total_cents: 10000 - 2500 + 1990 });
+    await expect(createOrder(otherCustomer)).resolves.toMatchObject({ total_cents: order.total_cents });
 
     // Após o vencimento, o backend recusa.
     await t.db.query("update public.coupons set starts_at = now() - interval '25 hours', expires_at = now() - interval '1 hour' where code = $1", [approved.code]);

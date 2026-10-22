@@ -40,8 +40,36 @@ export async function saveShippingRates(input: unknown): Promise<AdminResult> {
     const { error: delError } = keep.length > 0 ? await del.not("uf", "in", `(${keep.join(",")})`) : await del.neq("uf", "");
     if (delError) return { ok: false, message: errorMessage(errorCode(delError)) };
     revalidatePath("/admin/frete");
-    revalidatePath("/loja");
-    return { ok: true, message: "Tabela de frete salva. Pedidos já feitos mantêm o frete da época." };
+    // Os preços da vitrine dependem da tabela quando o frete está embutido.
+    revalidatePath("/", "layout");
+    return { ok: true, message: "Tabela de frete salva. Pedidos já feitos mantêm os valores da época." };
+  });
+}
+
+/** Liga/desliga o frete embutido no preço (o valor da UF somado a cada unidade). */
+export async function saveShippingMode(inPrice: unknown): Promise<AdminResult> {
+  return guarded(async () => {
+    const { db, user } = await requireAdmin("action");
+    const parsed = z.boolean().safeParse(inPrice);
+    if (!parsed.success) return { ok: false, message: "Valor inválido." };
+    const { error } = await db
+      .from("store_settings")
+      .update({ shipping_in_price: parsed.data, updated_by: user.id })
+      .eq("id", true);
+    if (error) {
+      // Sem a migração 20261022120000 a coluna não existe (PostgREST: PGRST204 / 42703).
+      if (error.code === "PGRST204" || error.code === "42703") {
+        return { ok: false, message: "Aplique a migração de frete embutido no Supabase antes de usar esta opção." };
+      }
+      return { ok: false, message: errorMessage(errorCode(error)) };
+    }
+    revalidatePath("/", "layout");
+    return {
+      ok: true,
+      message: parsed.data
+        ? "Frete embutido: o valor de cada estado entra no preço e o cliente vê frete grátis."
+        : "Frete cobrado à parte no checkout, uma vez por pedido.",
+    };
   });
 }
 

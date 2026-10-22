@@ -1,7 +1,8 @@
 # Hello World
 """Prepara o boné 3D do site: mesma geometria do modelo de referência, textura nova a partir das fotos.
 
-Uso: python -I scripts/build-polo-model.py
+Uso: python -I scripts/build-polo-model.py           (boné Polo da página inicial)
+     python -I scripts/build-polo-model.py --blank   (boné neutro das páginas de produto)
 
 Entrada
   brand-assets/source/pollo-sketchfab.glb   "Baseball Cap" de Scott VanArsdale (Sketchfab), CC BY 4.0
@@ -13,6 +14,11 @@ Saída
                                             (o original usa specular-glossiness, que o three.js não lê
                                             mais); textura de tecido preto + bordados projetados
   src/components/cap/capModelAnchors.ts     pontos de interesse no espaço do modelo (câmera/anotações)
+
+Modo --blank → public/models/cap-blank/cap.glb: a mesma geometria com o atlas cinza neutro (só o
+sombreado de costuras, ilhoses e trama, sem bordados) e um material por peça (copa, aba, forro,
+tira, rebite). A página de produto tinge cada peça com as cores medidas na foto do produto e
+projeta o logo recortado dela na frente da copa (ver src/components/cap/productCapTexture.ts).
 
 A textura não é uma foto colada: o atlas cinza do modelo (costuras, ilhoses, pespontos) é tingido
 com a cor do tecido medida nas fotos, e os bordados recortados das fotos são projetados na copa,
@@ -414,5 +420,121 @@ def main() -> None:
     print(f"ok · {OUT_GLB.relative_to(ROOT)} {OUT_GLB.stat().st_size / 1e6:.2f} MB · âncoras {list(anchors)}")
 
 
+OUT_BLANK = ROOT / "public" / "models" / "cap-blank" / "cap.glb"
+# Nível do atlas neutro (sRGB) na mediana do tecido: sobra margem para os realces das costuras.
+BLANK_LEVEL = 0.8
+
+
+def write_glb(path: Path, parts: list[Part], material_of: dict[str, int], materials: list[dict], images: list[bytes], generator: str) -> None:
+    w = Writer()
+    views = [w.image(data) for data in images]
+    gltf_images = [{"bufferView": v, "mimeType": "image/jpeg"} for v in views]
+    textures = [{"sampler": 0, "source": i} for i in range(len(views))]
+    meshes, gnodes = [], []
+    for p in parts:
+        attrs = {
+            "POSITION": w.accessor(p.pos.astype(np.float32), "VEC3", 34962, minmax=True),
+            "NORMAL": w.accessor(p.nrm.astype(np.float32), "VEC3", 34962),
+            "TEXCOORD_0": w.accessor(p.uv.astype(np.float32), "VEC2", 34962),
+        }
+        flat = p.idx.reshape(-1)
+        idx = flat.astype(np.uint16) if flat.max() < 65535 else flat.astype(np.uint32)
+        prim = {"attributes": attrs, "indices": w.accessor(idx, "SCALAR", 34963), "material": material_of[p.name], "mode": 4}
+        meshes.append({"name": p.name, "primitives": [prim]})
+        gnodes.append({"name": p.name, "mesh": len(meshes) - 1})
+    gltf = {
+        "asset": {
+            "version": "2.0",
+            "generator": generator,
+            "copyright": "\"Baseball Cap\" by Scott VanArsdale (https://sketchfab.com/vanart), CC BY 4.0 — textura alterada pela Maverick",
+            "extras": {"source": "https://sketchfab.com/3d-models/baseball-cap-1c1d34d73fd94e6b9e8f82b1eb7194a0", "license": "CC-BY-4.0"},
+        },
+        "scene": 0,
+        "scenes": [{"nodes": [len(gnodes)]}],
+        "nodes": gnodes + [{"name": "cap", "children": list(range(len(gnodes)))}],
+        "meshes": meshes,
+        "materials": materials,
+        "textures": textures,
+        "images": gltf_images,
+        "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}],
+        "accessors": w.accessors,
+        "bufferViews": w.views,
+        "buffers": [{"byteLength": len(w.bin)}],
+    }
+    while len(w.bin) % 4:
+        w.bin.append(0)
+    gltf["buffers"][0]["byteLength"] = len(w.bin)
+    js = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    js += b" " * ((4 - len(js) % 4) % 4)
+    total = 12 + 8 + len(js) + 8 + len(w.bin)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(struct.pack("<4sII", b"glTF", 2, total))
+        f.write(struct.pack("<I4s", len(js), b"JSON") + js)
+        f.write(struct.pack("<I4s", len(w.bin), b"BIN\x00") + bytes(w.bin))
+
+
+def build_blank() -> None:
+    """Boné neutro: atlas só com o sombreado do tecido e um material por peça (cores na página)."""
+    glb = Glb(SRC_GLB)
+    nodes = {n.get("name"): i for i, n in enumerate(glb.js["nodes"])}
+
+    def part(group: str, name: str) -> Part:
+        return Part(glb, glb.js["nodes"][nodes[group]]["children"][0], name)
+
+    crown = part("mainCap", "crown")
+    parts = [
+        crown,
+        part("bill", "brim"),
+        part("topButton", "button"),
+        part("innerLiner", "sweatband"),
+        part("strapAdjust_male", "strap-a"),
+        part("strapAdjust_female", "strap-b"),
+        part("metalButton", "rivet"),
+    ]
+    # Mesma normalização do boné Polo: as âncoras de capModelAnchors.ts valem para os dois.
+    half = (crown.pos[:, 0].max() - crown.pos[:, 0].min()) / 2
+    offset = np.array([(crown.pos[:, 0].max() + crown.pos[:, 0].min()) / 2, crown.pos[:, 1].min(), (crown.pos[:, 2].max() + crown.pos[:, 2].min()) / 2])
+    for p in parts:
+        p.pos = (p.pos - offset) / half
+
+    fabric_parts = parts[:4]
+    _, _, owner = uv_maps(fabric_parts, ATLAS)
+    mask = owner >= 0
+    base = np.asarray(glb.image(0).convert("RGB").resize((ATLAS, ATLAS), Image.Resampling.BICUBIC), np.float32) / 255
+    lum = base @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    ref = float(np.median(lum[mask]))
+    shade = np.clip(lum / ref, 0.35, 1.6) ** 0.85
+    gray = np.clip(shade * BLANK_LEVEL, 0, 1)
+    albedo = Image.fromarray((gray * 255).astype(np.uint8), "L").convert("RGB")
+    normal = glb.image(2).convert("RGB").resize((ATLAS, ATLAS), Image.Resampling.BICUBIC)
+
+    fabric = {"metallicFactor": 0.0, "roughnessFactor": 0.92}
+    textured = lambda name: {  # noqa: E731
+        "name": name,
+        "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, **fabric},
+        "normalTexture": {"index": 1, "scale": 0.8},
+    }
+    materials = [
+        textured("crown"),
+        textured("brim"),
+        textured("lining"),
+        {"name": "strap", "pbrMetallicRoughness": {"baseColorFactor": [0.6, 0.6, 0.6, 1.0], **fabric}, "doubleSided": True},
+        {"name": "rivet", "pbrMetallicRoughness": {"baseColorFactor": [0.55, 0.55, 0.56, 1.0], "metallicFactor": 0.85, "roughnessFactor": 0.4}, "doubleSided": True},
+    ]
+    material_of = {"crown": 0, "button": 0, "brim": 1, "sweatband": 2, "strap-a": 3, "strap-b": 3, "rivet": 4}
+    write_glb(
+        OUT_BLANK,
+        parts,
+        material_of,
+        materials,
+        [encode(albedo, "JPEG", quality=86, optimize=True, progressive=False), encode(normal, "JPEG", quality=88, optimize=True, progressive=False)],
+        "Maverick scripts/build-polo-model.py --blank",
+    )
+    print(f"ok · {OUT_BLANK.relative_to(ROOT)} {OUT_BLANK.stat().st_size / 1e6:.2f} MB · nível {BLANK_LEVEL}")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+
+    build_blank() if "--blank" in sys.argv[1:] else main()

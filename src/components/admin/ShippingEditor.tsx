@@ -18,8 +18,11 @@ interface Row {
 
 export function ShippingEditor({
   initial,
+  inPrice = false,
 }: {
   readonly initial: { uf: string; price_cents: number; delivery_estimate: string | null; is_active: boolean }[];
+  /** Frete embutido: o valor é um acréscimo por boné, não uma cobrança por pedido. */
+  readonly inPrice?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -87,7 +90,7 @@ export function ShippingEditor({
             <tr className="text-left text-xs text-muted">
               <th className="px-4 py-3 font-medium">Atende</th>
               <th className="px-4 py-3 font-medium">Estado</th>
-              <th className="px-4 py-3 font-medium">Frete (R$)</th>
+              <th className="px-4 py-3 font-medium">{inPrice ? "Acréscimo por boné (R$)" : "Frete (R$)"}</th>
               <th className="px-4 py-3 font-medium">Prazo exibido</th>
               <th className="px-4 py-3 font-medium">Ativo</th>
             </tr>

@@ -3,12 +3,12 @@
 
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Images, Minus, Plus, Rotate3d } from "lucide-react";
 import type { CatalogImage } from "@/lib/catalog";
 import type { VariantRow } from "@/lib/database.types";
 import { Button } from "@/components/ui/Button";
-import { useCart } from "@/components/cart/CartProvider";
+import { useVariantSelection } from "@/components/store/useVariantSelection";
 import { useDelivery } from "@/components/delivery/DeliveryProvider";
 import { FreeShippingNote, StorePrice } from "@/components/delivery/StorePrice";
 
@@ -19,8 +19,6 @@ interface Props {
   readonly variants: VariantRow[];
   readonly images: CatalogImage[];
 }
-
-const unique = (values: (string | null)[]) => [...new Set(values.filter((v): v is string => Boolean(v)))];
 
 // three.js e o modelo só carregam quando o cliente abre a vista 3D.
 const ProductCap3D = dynamic(() => import("@/components/store/ProductCap3D").then((m) => m.ProductCap3D), {
@@ -37,62 +35,34 @@ const ProductCap3D = dynamic(() => import("@/components/store/ProductCap3D").the
  * adicionar à sacola (preço e estoque do servidor).
  */
 export function ProductPurchase({ productId, slug, name, variants, images }: Props) {
-  const { add } = useCart();
   const { pricing } = useDelivery();
   const shippingInPrice = pricing.inPrice && pricing.rates.length > 0;
-  const colors = useMemo(() => unique(variants.map((v) => v.color)), [variants]);
-  const sizes = useMemo(() => unique(variants.map((v) => v.size)), [variants]);
-  const firstAvailable = variants.find((v) => v.stock > 0) ?? variants[0];
-
-  const [color, setColor] = useState<string | null>(firstAvailable?.color ?? null);
-  const [size, setSize] = useState<string | null>(firstAvailable?.size ?? null);
-  const [quantity, setQuantity] = useState(1);
+  const {
+    colors,
+    sizes,
+    color,
+    size,
+    quantity,
+    setQuantity,
+    selected,
+    stock,
+    maxQty,
+    gallery,
+    cover,
+    availableFor,
+    sizeExists,
+    colorInStock,
+    pickColor: chooseColor,
+    pickSize,
+    addToCart,
+  } = useVariantSelection({ productId, slug, name, variants, images });
   const [activeImage, setActiveImage] = useState(0);
   const [view3d, setView3d] = useState(false);
-
-  const selected = variants.find((v) => v.color === color && v.size === size) ?? null;
-  const stock = selected?.stock ?? 0;
-  const maxQty = Math.min(stock, 20);
-
-  const gallery = useMemo(() => {
-    const forColor = color ? images.filter((img) => img.color === color) : [];
-    const neutral = images.filter((img) => !img.color);
-    const list = forColor.length > 0 ? [...forColor, ...neutral] : images;
-    return list.length > 0 ? list : images;
-  }, [images, color]);
   const main = gallery[Math.min(activeImage, gallery.length - 1)];
-  // O 3D é pintado com a primeira foto da cor escolhida (cadastre a foto de frente primeiro).
-  const cover = gallery[0] ?? null;
-
-  const availableFor = (c: string | null, s: string | null) =>
-    variants.some((v) => v.color === c && v.size === s && v.stock > 0);
-  const sizeExists = (s: string) => variants.some((v) => v.color === color && v.size === s);
 
   const pickColor = (c: string) => {
-    setColor(c);
+    chooseColor(c);
     setActiveImage(0);
-    setQuantity(1);
-    if (!variants.some((v) => v.color === c && v.size === size)) {
-      setSize(variants.find((v) => v.color === c && v.stock > 0)?.size ?? variants.find((v) => v.color === c)?.size ?? null);
-    }
-  };
-
-  const handleAdd = () => {
-    if (!selected || stock <= 0) return;
-    add(
-      {
-        variantId: selected.id,
-        productId,
-        slug,
-        name,
-        variantLabel: [selected.color, selected.size].filter(Boolean).join(" / ") || null,
-        imageUrl: main?.url ?? null,
-        unitPriceCents: selected.price_cents,
-        compareAtCents: selected.compare_at_cents,
-        stock,
-      },
-      quantity,
-    );
   };
 
   return (
@@ -183,7 +153,7 @@ export function ProductPurchase({ productId, slug, name, variants, images }: Pro
               </legend>
               <div className="mt-3 flex flex-wrap gap-2">
                 {colors.map((c) => {
-                  const any = variants.some((v) => v.color === c && v.stock > 0);
+                  const any = colorInStock(c);
                   return (
                     <button
                       key={c}
@@ -210,10 +180,7 @@ export function ProductPurchase({ productId, slug, name, variants, images }: Pro
                   <button
                     key={s}
                     type="button"
-                    onClick={() => {
-                      setSize(s);
-                      setQuantity(1);
-                    }}
+                    onClick={() => pickSize(s)}
                     aria-pressed={size === s}
                     className={`min-h-12 min-w-14 rounded-sm border px-4 text-sm transition-colors ${
                       size === s ? "border-ink bg-ink text-paper" : "border-line-strong hover:border-ink"
@@ -250,7 +217,7 @@ export function ProductPurchase({ productId, slug, name, variants, images }: Pro
                 <Plus className="size-4" aria-hidden="true" />
               </button>
             </div>
-            <Button size="lg" className="flex-1" onClick={handleAdd} disabled={!selected || stock <= 0}>
+            <Button size="lg" className="flex-1" onClick={() => addToCart(main?.url ?? null)} disabled={!selected || stock <= 0}>
               {stock <= 0 ? "Esgotado" : "Adicionar à sacola"}
             </Button>
           </div>

@@ -11,15 +11,11 @@
 import {
   Box3,
   CanvasTexture,
-  Color,
   DirectionalLight,
-  DoubleSide,
   Group,
   HemisphereLight,
-  LinearMipmapLinearFilter,
   Mesh,
   MeshBasicMaterial,
-  MeshPhysicalMaterial,
   NeutralToneMapping,
   PerspectiveCamera,
   PlaneGeometry,
@@ -36,10 +32,8 @@ import {
 } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import type { Rgb } from "@/components/cap/productCapLook";
+import { CAP_BLANK_MODEL_URL, dressCap, paintCap, type CapPaint } from "@/components/cap/capPaint";
 import type { CapLookTextures } from "@/components/cap/productCapTexture";
-
-export const CAP_BLANK_MODEL_URL = "/models/cap-blank/cap.glb";
 
 export interface ProductCapStageOptions {
   readonly canvas: HTMLCanvasElement;
@@ -49,12 +43,6 @@ export interface ProductCapStageOptions {
   readonly onContextLost?: () => void;
 }
 
-/** Atlas neutro gravado com 0,8 (sRGB) na mediana do tecido → 0,6038 em linear. */
-const ATLAS_LEVEL = 0.6038;
-/** Cor da foto → albedo: a foto já traz a luz do estúdio; o render acrescenta a dele. */
-const COLOR_GAIN = 0.78;
-/** Alto da copa (espaço normalizado do modelo; ver capModelAnchors.ts). */
-const CROWN_TOP = 1.378;
 /** Maior extensão do boné na tela (coordenadas normalizadas, 1 = borda). */
 const FIT_LIMIT = 0.86;
 const LOW_TEXTURE_SIZE = 1024;
@@ -65,26 +53,8 @@ const IDLE_CENTER = -0.32;
 const IDLE_SWING = 0.72;
 const IDLE_DELAY_S = 2.6;
 
-const DECAL_FORWARD = new Vector3(0, -Math.sin((8 * Math.PI) / 180), -Math.cos((8 * Math.PI) / 180));
-const DECAL_RIGHT = new Vector3(1, 0, 0);
-const DECAL_UP = new Vector3().crossVectors(DECAL_RIGHT, DECAL_FORWARD).normalize();
-
 function damp(current: number, target: number, lambda: number, dt: number): number {
   return current + (target - current) * (1 - Math.exp(-lambda * dt));
-}
-
-function linearColor([r, g, b]: Rgb, gain: number): Color {
-  // Color.setRGB em sRGB converte para o espaço linear de trabalho do three.js.
-  const color = new Color().setRGB(r / 255, g / 255, b / 255, SRGBColorSpace);
-  return color.multiplyScalar(gain / ATLAS_LEVEL);
-}
-
-interface DecalUniforms {
-  decalMap: { value: Texture | null };
-  decalEnabled: { value: number };
-  decalCenter: { value: Vector3 };
-  decalSize: { value: Vector2 };
-  decalGain: { value: number };
 }
 
 export class ProductCapStage {
@@ -100,18 +70,7 @@ export class ProductCapStage {
   private readonly textures = new Set<Texture>();
   private readonly options: ProductCapStageOptions;
 
-  private crown: MeshPhysicalMaterial | null = null;
-  private brim: MeshPhysicalMaterial | null = null;
-  private lining: MeshPhysicalMaterial | null = null;
-  private strap: MeshPhysicalMaterial | null = null;
-  private decalTexture: CanvasTexture | null = null;
-  private readonly decal: DecalUniforms = {
-    decalMap: { value: null },
-    decalEnabled: { value: 0 },
-    decalCenter: { value: new Vector3(0, 0.76, 0.86) },
-    decalSize: { value: new Vector2(0.6, 0.5) },
-    decalGain: { value: COLOR_GAIN / ATLAS_LEVEL },
-  };
+  private paint: CapPaint | null = null;
 
   private width = 1;
   private height = 1;
@@ -187,43 +146,8 @@ export class ProductCapStage {
         this.track(texture);
         this.textures.add(texture);
       }
-      const fabric = () =>
-        this.track(
-          new MeshPhysicalMaterial({
-            map: source.map,
-            normalMap: source.normalMap,
-            normalScale: source.normalScale.clone(),
-            roughness: 0.95,
-            sheen: 0.35,
-            sheenRoughness: 0.6,
-            side: DoubleSide,
-          }),
-        );
-      switch (source.name) {
-        case "crown":
-          // Copa e botão do topo dividem o material (e o decalque).
-          if (!this.crown) {
-            this.crown = fabric();
-            this.installDecal(this.crown);
-          }
-          object.material = this.crown;
-          break;
-        case "brim":
-          this.brim ??= fabric();
-          object.material = this.brim;
-          break;
-        case "lining":
-          this.lining ??= fabric();
-          object.material = this.lining;
-          break;
-        case "strap":
-          this.strap ??= this.track(new MeshPhysicalMaterial({ roughness: 0.85, sheen: 0.4, side: DoubleSide }));
-          object.material = this.strap;
-          break;
-        default:
-          break;
-      }
     });
+    this.paint = dressCap(model, (material) => this.track(material));
 
     const box = new Box3().setFromObject(model);
     const center = box.getCenter(new Vector3());
@@ -239,99 +163,9 @@ export class ProductCapStage {
     this.updateFit();
   }
 
-  /** Decalque projetado na frente da copa (ortográfico, só na face voltada para a frente). */
-  private installDecal(material: MeshPhysicalMaterial): void {
-    const uniforms = this.decal;
-    material.customProgramCacheKey = () => "product-cap-decal";
-    material.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, uniforms, {
-        decalRight: { value: DECAL_RIGHT },
-        decalUp: { value: DECAL_UP },
-        decalForward: { value: DECAL_FORWARD },
-        decalAtlasLevel: { value: ATLAS_LEVEL },
-      });
-      shader.vertexShader = shader.vertexShader
-        .replace("#include <common>", "#include <common>\nvarying vec3 vDecalPos;\nvarying vec3 vDecalNormal;")
-        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvDecalPos = position;\nvDecalNormal = objectNormal;");
-      shader.fragmentShader = shader.fragmentShader
-        .replace(
-          "#include <common>",
-          `#include <common>
-uniform sampler2D decalMap;
-uniform float decalEnabled;
-uniform vec3 decalCenter;
-uniform vec2 decalSize;
-uniform float decalGain;
-uniform vec3 decalRight;
-uniform vec3 decalUp;
-uniform vec3 decalForward;
-uniform float decalAtlasLevel;
-varying vec3 vDecalPos;
-varying vec3 vDecalNormal;`,
-        )
-        .replace(
-          "#include <map_fragment>",
-          `#include <map_fragment>
-if (decalEnabled > 0.5 && gl_FrontFacing) {
-  vec3 decalRel = vDecalPos - decalCenter;
-  vec2 decalUv = vec2(dot(decalRel, decalRight) / decalSize.x + 0.5, dot(decalRel, decalUp) / decalSize.y + 0.5);
-  float decalFacing = dot(normalize(vDecalNormal), -decalForward);
-  if (decalFacing > 0.2 && abs(dot(decalRel, decalForward)) < 0.6 && all(greaterThanEqual(decalUv, vec2(0.0))) && all(lessThanEqual(decalUv, vec2(1.0)))) {
-    vec4 decalColor = texture2D(decalMap, decalUv);
-    #ifdef USE_MAP
-      float decalShade = sampledDiffuseColor.g / decalAtlasLevel;
-    #else
-      float decalShade = 1.0;
-    #endif
-    diffuseColor.rgb = mix(diffuseColor.rgb, decalColor.rgb * decalGain * decalAtlasLevel * decalShade, decalColor.a * smoothstep(0.2, 0.35, decalFacing));
-  }
-}`,
-        );
-    };
-  }
-
   /** Aplica as cores e o logo lidos da foto (null = boné neutro, cinza claro). */
   setLook(look: CapLookTextures | null): void {
-    const crown: Rgb = look?.crown ?? [196, 192, 186];
-    const brim: Rgb = look?.brim ?? crown;
-    this.crown?.color.copy(linearColor(crown, COLOR_GAIN));
-    this.brim?.color.copy(linearColor(brim, COLOR_GAIN));
-    // Forro e tira: o tom da copa, um pouco mais escuros (sombra natural de dentro).
-    this.lining?.color.copy(linearColor(crown, COLOR_GAIN * 0.8));
-    this.strap?.color.copy(linearColor(crown, COLOR_GAIN * 0.85).multiplyScalar(ATLAS_LEVEL));
-    for (const material of [this.crown, this.brim, this.lining, this.strap]) {
-      if (!material) continue;
-      // Brilho de fibra nas bordas, no tom do próprio tecido.
-      material.sheenColor.copy(material.color).multiplyScalar(ATLAS_LEVEL).lerp(new Color(0.5, 0.5, 0.5), 0.35);
-    }
-
-    this.decalTexture?.dispose();
-    this.decalTexture = null;
-    const decal = look?.decal;
-    if (decal) {
-      const texture = new CanvasTexture(decal.canvas);
-      texture.colorSpace = SRGBColorSpace;
-      texture.minFilter = LinearMipmapLinearFilter;
-      texture.anisotropy = 8;
-      this.decalTexture = texture;
-      // Largura do logo pela proporção da foto (copa com largura 2 no modelo), com limites
-      // para nunca invadir a aba nem passar do alto da copa.
-      let width = Math.min(1.3, Math.max(0.3, decal.widthRatio * 2.05));
-      let height = width / decal.aspect;
-      if (height > 0.78) {
-        width *= 0.78 / height;
-        height = 0.78;
-      }
-      // Na foto o logo fica perto do meio da frente; no modelo, o meio dos painéis da frente
-      // fica em ~52% da altura da copa (a base dela some atrás da aba).
-      let y = CROWN_TOP * (0.38 + 0.32 * decal.rise);
-      y = Math.max(0.3 + height / 2, Math.min(1.2 - height / 2, y));
-      // O shader projeta no espaço do próprio modelo (atributo position), sem o deslocamento do pivô.
-      this.decal.decalCenter.value.set(0, y, 0.86);
-      this.decal.decalSize.value.set(width, height);
-    }
-    this.decal.decalMap.value = this.decalTexture;
-    this.decal.decalEnabled.value = this.decalTexture ? 1 : 0;
+    if (this.paint) paintCap(this.paint, look);
     this.dirty = true;
   }
 
@@ -521,7 +355,7 @@ if (decalEnabled > 0.5 && gl_FrontFacing) {
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerUp);
     canvas.removeEventListener("keydown", this.onKeyDown);
-    this.decalTexture?.dispose();
+    if (this.paint) this.paint.decalTexture?.dispose();
     for (const item of this.disposables) item.dispose();
     this.renderer.dispose();
     // Fechar a vista 3D devolve o contexto WebGL (abrir/fechar várias vezes não acumula).

@@ -20,6 +20,9 @@
   --color-gold-ink: #86611d;
   --color-gold-light: #d6b26a;
 
+  /* Estábulo da parede da coleção (fundo enquanto o 3D monta e o painel de compra). */
+  --color-barn: #140d08;
+
   --color-success: #2f6b3a;
   --color-danger: #a4271b;
 
@@ -190,6 +193,57 @@
   }
   to {
     transform: none;
+  }
+}
+
+/* ───────────────────────── Parede da coleção (página inicial) ───────────────────────── */
+@layer components {
+  /* Penumbra do estábulo: bordas no escuro, prateleiras no claro. */
+  .barn-vignette {
+    background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgb(10 6 3 / 0.55) 100%);
+  }
+
+  .wall-label {
+    opacity: 0;
+    transform: translate3d(-50%, 6px, 0);
+  }
+
+  .wall-label.is-on {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0);
+  }
+
+  /* Sem cursor (telas de toque) não há como "passar por cima": os nomes ficam sempre à vista. */
+  @media (hover: none) {
+    .wall-label {
+      opacity: 1;
+      transform: translate3d(-50%, 0, 0);
+    }
+  }
+
+  .detail-enter > * {
+    animation: fade-up 0.8s var(--ease-out-expo) 0.25s both;
+  }
+
+  .wall-labels {
+    animation: wall-labels-in 0.5s ease 0.7s both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wall-label {
+      transition: none;
+    }
+
+    .detail-enter > *,
+    .wall-labels {
+      animation: none;
+    }
+  }
+}
+
+@keyframes wall-labels-in {
+  from {
+    opacity: 0;
   }
 }
 
